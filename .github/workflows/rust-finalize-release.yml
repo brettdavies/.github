@@ -1,0 +1,50 @@
+# Reusable finalize-release workflow for brettdavies Rust CLI tools.
+# Publishes a draft GitHub Release after Homebrew bottles are uploaded.
+# Triggered by repository_dispatch from homebrew-tap's publish workflow.
+#
+# Caller example:
+#   jobs:
+#     finalize:
+#       uses: brettdavies/.github/.github/workflows/rust-finalize-release.yml@main
+#
+# Required caller permissions: contents: write
+#
+# Security: The "draft release must exist for this tag" check is a defense-in-depth
+# gate. Even if an attacker sends a valid-format tag via repository_dispatch, they
+# can only publish a draft that was already created by the legitimate release pipeline.
+name: Rust Finalize Release
+
+on:
+  workflow_call:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.client_payload.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag provided in dispatch payload"
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+          RELEASE_ID=$(gh api "repos/${REPO}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::No draft release found for tag ${TAG}"
+            exit 1
+          fi
+          gh api "repos/${REPO}/releases/${RELEASE_ID}" \
+            --method PATCH \
+            -f draft=false
+          echo "Published release ${TAG} (id: ${RELEASE_ID})"

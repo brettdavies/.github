@@ -1,0 +1,112 @@
+# Reusable CI workflow for brettdavies Rust CLI tools.
+# Runs formatting, linting, tests, security audit, package check, and changelog.
+#
+# Caller example:
+#   jobs:
+#     ci:
+#       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+#
+# Required caller permissions: contents: write (for changelog auto-commit)
+name: Rust CI
+
+on:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  check:
+    name: Fmt, clippy, test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Tests
+        run: cargo test
+
+  audit:
+    name: Security audit
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        checks: [advisories, "bans licenses sources"]
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2.0.15
+        with:
+          command: check ${{ matrix.checks }}
+
+  package-check:
+    name: Package check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: List package contents
+        run: cargo package --list
+
+      - name: Dry-run publish
+        run: cargo publish --dry-run
+
+  changelog:
+    name: Changelog
+    # Inside workflow_call, github.event_name is 'workflow_call' not 'push'.
+    # Check github.ref only -- it inherits from the caller's trigger.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
+        with:
+          config: cliff.toml
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "No changelog changes to commit"
+          else
+            git commit -m "docs: update CHANGELOG.md [skip ci]"
+            git push
+          fi
