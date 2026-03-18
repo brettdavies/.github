@@ -234,7 +234,7 @@ jobs:
           CRATE: ${{ inputs.crate }}
         run: |
           mkdir -p release
-          for dir in artifacts/${CRATE}-*; do
+          for dir in "artifacts/${CRATE}-"*; do
             [ ! -d "$dir" ] && continue
             cp "$dir"/*.tar.gz "$dir"/*.zip release/ 2>/dev/null || true
           done
@@ -243,7 +243,7 @@ jobs:
             echo "::error::No release artifacts found"
             exit 1
           fi
-          sha256sum * > sha256sum.txt
+          sha256sum ./* > sha256sum.txt
           ls -la
 
       - name: Create GitHub Release (draft)
