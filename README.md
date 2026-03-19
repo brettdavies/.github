@@ -32,7 +32,7 @@ CI for Rust CLI tools: fmt, clippy, test, security audit, package check, changel
 |---|---|
 | **Trigger** | `workflow_call` (no inputs) |
 | **Required caller permissions** | `contents: write` |
-| **Secrets** | `CHANGELOG_TOKEN` (optional) — PAT with admin bypass for changelog commits past rulesets. Falls back to `GITHUB_TOKEN`. Required on personal repos with `pull_request` rulesets. |
+| **Secrets** | `CI_RELEASE_TOKEN` (optional) — PAT with admin bypass for changelog commits past rulesets. Falls back to `GITHUB_TOKEN`. Required on personal repos with `pull_request` rulesets. |
 
 **Caller example:**
 
@@ -49,7 +49,7 @@ jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
     secrets:
-      CHANGELOG_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 ```
 
 ### `rust-release.yml`
@@ -61,7 +61,7 @@ crates.io publish (Trusted Publishing OIDC), draft GitHub Release, Homebrew disp
 |---|---|
 | **Trigger** | `workflow_call` |
 | **Inputs** | `crate` (string, required), `bin` (string, required) |
-| **Secrets** | `HOMEBREW_TAP_TOKEN` (required, explicit — not inherited) |
+| **Secrets** | `CI_RELEASE_TOKEN` (required, explicit — not inherited) |
 | **Required caller permissions** | `contents: write`, `id-token: write` |
 
 **Caller example:**
@@ -81,7 +81,7 @@ jobs:
       crate: bird
       bin: bird
     secrets:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 ```
 
 ### `rust-finalize-release.yml`
