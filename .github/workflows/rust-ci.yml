@@ -11,6 +11,10 @@ name: Rust CI
 
 on:
   workflow_call:
+    secrets:
+      CHANGELOG_TOKEN:
+        description: "PAT with contents:write + admin bypass for changelog commits past rulesets. Falls back to GITHUB_TOKEN."
+        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -98,18 +102,27 @@ jobs:
 
       - name: Commit changelog
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use CHANGELOG_TOKEN (admin PAT) to bypass rulesets on personal repos.
+          # GITHUB_TOKEN can't bypass pull_request rules (Integration bypass is org-only).
+          # Falls back to GITHUB_TOKEN for repos without rulesets.
+          GH_TOKEN: ${{ secrets.CHANGELOG_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           # Check for local changes to CHANGELOG.md
           if git diff --quiet CHANGELOG.md; then
             echo "No changelog changes to commit"
           else
-            # Use GitHub Contents API so the commit is signed/verified
+            # Use GitHub Contents API so the commit is signed/verified.
+            # Explicit committer/author keeps attribution as github-actions[bot]
+            # even when authenticating with a user PAT.
             FILE_SHA=$(gh api "repos/${REPO}/contents/CHANGELOG.md" --jq '.sha')
             gh api "repos/${REPO}/contents/CHANGELOG.md" \
               --method PUT \
               -f message="docs: update CHANGELOG.md [skip ci]" \
               -f content="$(base64 -w 0 CHANGELOG.md)" \
-              -f sha="${FILE_SHA}"
+              -f sha="${FILE_SHA}" \
+              -f committer[name]="github-actions[bot]" \
+              -f committer[email]="41898282+github-actions[bot]@users.noreply.github.com" \
+              -f author[name]="github-actions[bot]" \
+              -f author[email]="41898282+github-actions[bot]@users.noreply.github.com"
           fi
