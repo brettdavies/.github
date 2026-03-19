@@ -26,13 +26,12 @@ named `.github`, the on-disk path is:
 
 ### `rust-ci.yml`
 
-CI for Rust CLI tools: fmt, clippy, test, security audit, package check, changelog.
+CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
 | | |
 |---|---|
-| **Trigger** | `workflow_call` (no inputs) |
-| **Required caller permissions** | `contents: write` |
-| **Secrets** | `CI_RELEASE_TOKEN` (optional) — PAT with admin bypass for changelog commits past rulesets. Falls back to `GITHUB_TOKEN`. Required on personal repos with `pull_request` rulesets. |
+| **Trigger** | `workflow_call` (no inputs, no secrets) |
+| **Required caller permissions** | `contents: read` |
 
 **Caller example:**
 
@@ -44,18 +43,17 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
-    secrets:
-      CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 ```
 
 ### `rust-release.yml`
 
 Full release pipeline: version check, audit, cross-platform build (5 targets),
-crates.io publish (Trusted Publishing OIDC), draft GitHub Release, Homebrew dispatch.
+crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes
+extracted from CHANGELOG.md), Homebrew dispatch.
 
 | | |
 |---|---|

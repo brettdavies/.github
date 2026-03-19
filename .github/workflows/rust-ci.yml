@@ -1,20 +1,16 @@
 # Reusable CI workflow for brettdavies Rust CLI tools.
-# Runs formatting, linting, tests, security audit, package check, and changelog.
+# Runs formatting, linting, tests, security audit, and package check.
 #
 # Caller example:
 #   jobs:
 #     ci:
 #       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
 #
-# Required caller permissions: contents: write (for changelog auto-commit)
+# Required caller permissions: contents: read
 name: Rust CI
 
 on:
   workflow_call:
-    secrets:
-      CI_RELEASE_TOKEN:
-        description: "PAT with contents:write + admin bypass for changelog commits past rulesets. Falls back to GITHUB_TOKEN."
-        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -79,50 +75,3 @@ jobs:
 
       - name: Dry-run publish
         run: cargo publish --dry-run
-
-  changelog:
-    name: Changelog
-    # Inside workflow_call, github.event_name is 'workflow_call' not 'push'.
-    # Check github.ref only -- it inherits from the caller's trigger.
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-
-      - uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4.7.1
-        with:
-          config: cliff.toml
-        env:
-          OUTPUT: CHANGELOG.md
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Commit changelog
-        env:
-          # Use CI_RELEASE_TOKEN (admin PAT) to bypass rulesets on personal repos.
-          # GITHUB_TOKEN can't bypass pull_request rules (Integration bypass is org-only).
-          # Falls back to GITHUB_TOKEN for repos without rulesets.
-          GH_TOKEN: ${{ secrets.CI_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Check for local changes to CHANGELOG.md
-          if git diff --quiet CHANGELOG.md; then
-            echo "No changelog changes to commit"
-          else
-            # Use GitHub Contents API so the commit is signed/verified.
-            # Explicit committer/author keeps attribution as github-actions[bot]
-            # even when authenticating with a user PAT.
-            FILE_SHA=$(gh api "repos/${REPO}/contents/CHANGELOG.md" --jq '.sha')
-            gh api "repos/${REPO}/contents/CHANGELOG.md" \
-              --method PUT \
-              -f message="docs: update CHANGELOG.md [skip ci]" \
-              -f content="$(base64 -w 0 CHANGELOG.md)" \
-              -f sha="${FILE_SHA}" \
-              -f committer[name]="github-actions[bot]" \
-              -f committer[email]="41898282+github-actions[bot]@users.noreply.github.com" \
-              -f author[name]="github-actions[bot]" \
-              -f author[email]="41898282+github-actions[bot]@users.noreply.github.com"
-          fi
