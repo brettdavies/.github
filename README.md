@@ -32,7 +32,7 @@ CI for Rust CLI tools: fmt, clippy, test, security audit, package check, changel
 |---|---|
 | **Trigger** | `workflow_call` (no inputs) |
 | **Required caller permissions** | `contents: write` |
-| **Secrets** | None (only `GITHUB_TOKEN`, which flows automatically) |
+| **Secrets** | `CHANGELOG_TOKEN` (optional) — PAT with admin bypass for changelog commits past rulesets. Falls back to `GITHUB_TOKEN`. Required on personal repos with `pull_request` rulesets. |
 
 **Caller example:**
 
@@ -48,6 +48,8 @@ permissions:
 jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    secrets:
+      CHANGELOG_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 ```
 
 ### `rust-release.yml`
