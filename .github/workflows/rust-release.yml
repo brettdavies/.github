@@ -124,7 +124,7 @@ jobs:
         if: matrix.cross
         run: |
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall cross --version 0.2.5 --no-confirm
+          cargo binstall cross --version 0.2.5 --no-confirm --force
 
       - name: Determine binary name
         id: binary
