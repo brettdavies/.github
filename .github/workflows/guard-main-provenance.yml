@@ -2,7 +2,12 @@
 # Checks that every non-exempt commit has a (#N) PR reference in its message,
 # indicating it was squash-merged from a feature PR to dev.
 #
-# Exempt prefixes: docs:, chore: (changelog and version bump commits)
+# Skipped for release/* branches — cherry-picks from dev inherently lose PR
+# references, and the release PR itself is the review gate.
+#
+# Exempt prefixes: docs:, chore:, ci:, style:, build: (housekeeping commits
+# authored directly on the release branch: version bumps, changelogs, CI tweaks).
+# test: is NOT exempt — tests are code and must go through PRs.
 #
 # Caller example:
 #   jobs:
@@ -29,6 +34,13 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
+            // Skip for release branches — cherry-picks lose PR references by design
+            const headRef = context.payload.pull_request.head.ref;
+            if (/^release\//.test(headRef)) {
+              core.info(`Skipping provenance check for release branch: ${headRef}`);
+              return;
+            }
+
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -36,7 +48,7 @@ jobs:
               per_page: 100,
             });
 
-            const exempt = /^(docs|chore|ci|style|test|build)(\(.+\))?:/i;
+            const exempt = /^(docs|chore|ci|style|build)(\(.+\))?:/i;
             const prRef = /\(#\d+\)/;
 
             const violations = commits
@@ -48,7 +60,7 @@ jobs:
                 `Commits must come from PRs to dev (squash commits include (#N) references).\n` +
                 `The following commits have no PR reference and are not exempt:\n` +
                 violations.map(m => `  - ${m}`).join('\n') + '\n\n' +
-                `Exempt prefixes: docs:, chore:, ci:, style:, test:, build:\n` +
+                `Exempt prefixes: docs:, chore:, ci:, style:, build:\n` +
                 `Fix: use feature PRs to dev instead of committing directly to the release branch.`
               );
             } else {
