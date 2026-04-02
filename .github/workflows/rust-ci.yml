@@ -109,6 +109,14 @@ jobs:
               per_page: 100,
             });
             const changed = files.map(f => f.filename);
+
+            // Skip changelog check for non-release PRs (no Cargo.toml version bump).
+            // Release PRs always bump the version, so this is a reliable signal.
+            if (!changed.includes('Cargo.toml')) {
+              core.info('Cargo.toml not changed — not a release PR. Skipping changelog check.');
+              return;
+            }
+
             if (!changed.includes('CHANGELOG.md')) {
               core.setFailed(
                 'CHANGELOG.md was not updated in this PR.\n' +
