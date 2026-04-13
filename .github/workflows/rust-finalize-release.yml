@@ -1,6 +1,11 @@
 # Reusable finalize-release workflow for brettdavies Rust CLI tools.
-# Publishes a draft GitHub Release after Homebrew bottles are uploaded.
+# Ensures a GitHub Release is published and marked as latest.
 # Triggered by repository_dispatch from homebrew-tap's publish workflow.
+#
+# Idempotent: succeeds whether the release is still a draft or already published.
+# publish.yml undrafts the release before brew pr-pull runs, so by the time this
+# workflow fires the release is typically already published. This step ensures
+# make_latest=true and handles the legacy case where the release is still a draft.
 #
 # Caller example:
 #   jobs:
@@ -9,9 +14,9 @@
 #
 # Required caller permissions: contents: write
 #
-# Security: The "draft release must exist for this tag" check is a defense-in-depth
-# gate. Even if an attacker sends a valid-format tag via repository_dispatch, they
-# can only publish a draft that was already created by the legitimate release pipeline.
+# Security: only a release that already exists for this tag can be finalized.
+# Even if an attacker sends a valid-format tag via repository_dispatch, they
+# can only finalize a release that was already created by the legitimate pipeline.
 name: Rust Finalize Release
 
 on:
@@ -24,7 +29,7 @@ jobs:
   finalize:
     runs-on: ubuntu-22.04
     steps:
-      - name: Publish draft release
+      - name: Finalize release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.client_payload.tag }}
@@ -38,14 +43,29 @@ jobs:
             echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
             exit 1
           fi
+
+          # Find release for this tag (draft or published)
           RELEASE_ID=$(gh api "repos/${REPO}/releases" \
             --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
-          if [ -z "$RELEASE_ID" ]; then
-            echo "::error::No draft release found for tag ${TAG}"
-            exit 1
+
+          if [ -n "$RELEASE_ID" ]; then
+            # Draft release found — publish it and mark as latest
+            gh api "repos/${REPO}/releases/${RELEASE_ID}" \
+              --method PATCH \
+              -f draft=false \
+              -f make_latest=true
+            echo "Published draft release ${TAG} (id: ${RELEASE_ID})"
+          else
+            # No draft — check for already-published release
+            RELEASE_ID=$(gh api "repos/${REPO}/releases" \
+              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .id")
+            if [ -n "$RELEASE_ID" ]; then
+              gh api "repos/${REPO}/releases/${RELEASE_ID}" \
+                --method PATCH \
+                -f make_latest=true
+              echo "Release ${TAG} already published (id: ${RELEASE_ID}), ensured make_latest"
+            else
+              echo "::error::No release found for tag ${TAG}"
+              exit 1
+            fi
           fi
-          gh api "repos/${REPO}/releases/${RELEASE_ID}" \
-            --method PATCH \
-            -f draft=false \
-            -f make_latest=true
-          echo "Published release ${TAG} (id: ${RELEASE_ID})"
