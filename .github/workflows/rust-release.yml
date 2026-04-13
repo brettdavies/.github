@@ -1,5 +1,5 @@
 # Reusable release workflow for brettdavies Rust CLI tools.
-# Builds cross-platform binaries, publishes to crates.io, creates draft GitHub
+# Builds cross-platform binaries, publishes to crates.io, creates GitHub
 # Release, and dispatches Homebrew formula update.
 #
 # Caller example:
@@ -254,12 +254,12 @@ jobs:
           sha256sum ./* > sha256sum.txt
           ls -la
 
-      - name: Create GitHub Release (draft)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           files: release/*
           body: ${{ steps.changelog.outputs.content }}
-          draft: true
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
