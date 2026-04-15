@@ -1,0 +1,68 @@
+# Reusable workflow to enforce the "release branch pattern" for PRs to main.
+# Rejects any PR whose head branch doesn't start with a configured prefix
+# (default: `release/`).
+#
+# Caller example:
+#   jobs:
+#     guard-release:
+#       uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
+#
+# Caller with custom prefix:
+#   jobs:
+#     guard-release:
+#       uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
+#       with:
+#         prefix: release-
+#
+# Required caller permissions: pull-requests: read
+#
+# This is a structural guard, not a security boundary — anyone with push
+# access can still rename a branch to satisfy the pattern. The goal is to
+# catch the common mistake (opening a PR from feat/* or dev directly to main)
+# before it produces noise in main's history, and to keep dev off-limits as
+# a PR head so `deleteBranchOnMerge` can never delete it.
+
+name: Guard release branch pattern
+
+on:
+  workflow_call:
+    inputs:
+      prefix:
+        description: 'Required head-branch prefix for PRs to main (default: release/)'
+        required: false
+        type: string
+        default: 'release/'
+
+permissions:
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  check-release-branch-name:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Verify head branch matches prefix
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          PREFIX: ${{ inputs.prefix }}
+        run: |
+          if [[ "$HEAD_REF" != "$PREFIX"* ]]; then
+            echo "::error title=Wrong head branch::PRs to main must come from a '$PREFIX*' branch."
+            echo ""
+            echo "You opened a PR from '$HEAD_REF' to main."
+            echo ""
+            echo "The correct workflow is:"
+            echo "  1. Open your PR to dev instead (feature → dev)."
+            echo "  2. When dev is ready to ship, cut a '${PREFIX}<slug>' branch"
+            echo "     from origin/main and cherry-pick the commits you want to"
+            echo "     release (see RELEASES.md / RELEASING.md)."
+            echo "  3. Open the '${PREFIX}<slug>' → main PR."
+            echo ""
+            echo "If this PR legitimately should bypass the pattern (e.g. an"
+            echo "emergency hotfix), rename your branch to '${PREFIX}<slug>'"
+            echo "and push again."
+            exit 1
+          fi
+          echo "Head branch '$HEAD_REF' matches '$PREFIX*' — OK."
