@@ -4,13 +4,12 @@ Reusable GitHub Actions workflows for all brettdavies Rust CLI tools.
 
 ## Why
 
-Every SHA bump, runner update, or new feature requires exactly one PR to this repo
-instead of N PRs across N consumer repos.
+Every SHA bump, runner update, or new feature requires exactly one PR to this repo instead of N PRs across N consumer
+repos.
 
 ## Directory structure
 
-GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
-named `.github`, the on-disk path is:
+GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is* named `.github`, the on-disk path is:
 
 ```text
 .github/                    # repo root
@@ -51,9 +50,8 @@ jobs:
 
 ### `rust-release.yml`
 
-Full release pipeline: version check, audit, cross-platform build (5 targets),
-crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes
-extracted from CHANGELOG.md), Homebrew dispatch.
+Full release pipeline: version check, audit, cross-platform build (5 targets), crates.io publish (Trusted Publishing
+OIDC), draft GitHub Release (notes extracted from CHANGELOG.md), Homebrew dispatch.
 
 | | |
 |---|---|
@@ -106,6 +104,70 @@ jobs:
     uses: brettdavies/.github/.github/workflows/rust-finalize-release.yml@main
 ```
 
+### `guard-main-docs.yml`
+
+Blocks engineering docs (`docs/plans/`, `docs/solutions/`, `docs/brainstorms/`, `docs/reviews/`) from reaching main.
+
+| | |
+|---|---|
+| **Trigger** | `workflow_call` (no inputs) |
+| **Required caller permissions** | `pull-requests: read` |
+
+**Caller example:**
+
+```yaml
+name: Guard main from engineering docs
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  pull-requests: read
+jobs:
+  guard-docs:
+    uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
+```
+
+### `guard-release-branch.yml`
+
+Rejects PRs to main whose head branch doesn't start with `release/`. Enforces the release-branch pattern so that `dev`
+is never a PR head (which keeps `deleteBranchOnMerge: true` compatible with a forever `dev` branch).
+
+| | |
+|---|---|
+| **Trigger** | `workflow_call` with optional `prefix` input (default `release/`) |
+| **Required caller permissions** | `pull-requests: read` |
+
+**Caller example:**
+
+```yaml
+name: Guard release branch pattern
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  pull-requests: read
+jobs:
+  guard-release:
+    uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
+```
+
+## Ruleset templates
+
+Starting points for GitHub branch protection, committed under `.github/rulesets/`. Consumer repos copy these into their
+own `.github/rulesets/` and extend the `required_status_checks` list with repo-specific checks.
+
+| Template | Purpose |
+|---|---|
+| `protect-main.json` | Squash-only PR merge, linear history, required signatures, `actionlint` required. Add repo-specific checks (`ci / <job>`, `guard-docs / check-forbidden-docs`, `Guard release branch pattern / check-release-branch-name`) before applying. |
+| `protect-dev.json` | Dev forever-branch protection: no deletion, no non-fast-forward, required signatures. No PR requirement at the ruleset level (enforced by convention + `guard-release-branch` on the main side). |
+
+Apply with `gh api`:
+
+```bash
+gh api -X POST repos/<owner>/<repo>/rulesets --input .github/rulesets/protect-dev.json
+gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/protect-main.json
+```
+
 ## Security
 
 - All third-party actions are SHA-pinned (except `dtolnay/rust-toolchain@stable`)
@@ -134,5 +196,5 @@ Migrate to `@v1` semver tags when a third-party contributor or third+ consumer a
 ## Naming coupling
 
 The Homebrew dispatch chain assumes `formula name == crate name == repo name`.
-If a future tool breaks this coupling, add an optional `formula` input to
-`rust-release.yml` and update `homebrew-tap/publish.yml`.
+If a future tool breaks this coupling, add an optional `formula` input to `rust-release.yml` and update
+`homebrew-tap/publish.yml`.
