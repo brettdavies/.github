@@ -115,6 +115,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # When a consumer repo ships a `rust-toolchain.toml` pinning the
+      # toolchain, `dtolnay/rust-toolchain` honours the TOML's channel but
+      # installs only the host default target; the `targets:` input above
+      # is silently ignored for the pinned toolchain. Re-add the matrix
+      # target explicitly so cross-compile builds don't fail with
+      # "can't find crate for `core`".
+      # Skipped when `cross: true` because the cross docker image brings
+      # its own pre-configured toolchain.
+      - name: Ensure target installed
+        if: matrix.cross != true
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
