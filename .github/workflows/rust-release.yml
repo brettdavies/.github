@@ -67,7 +67,11 @@ jobs:
       - name: Verify tag matches Cargo.toml version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          CARGO_VERSION=$(cargo pkgid | sed 's/.*#//')
+          # cargo pkgid output varies: `path+file:///path#0.1.1` on some
+          # setups, `name@0.1.1` on others (cargo picks the shortest
+          # unambiguous form). Strip through the last `#` OR `@` so both
+          # shapes collapse to the bare version.
+          CARGO_VERSION=$(cargo pkgid | sed -E 's|.*[@#]||')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${CARGO_VERSION}"
             exit 1
