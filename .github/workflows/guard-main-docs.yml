@@ -40,6 +40,8 @@ jobs:
                 f.startsWith('docs/plans/') ||
                 f.startsWith('docs/solutions/') ||
                 f.startsWith('docs/brainstorms/') ||
+                f.startsWith('docs/ideation/') ||
+                f.startsWith('docs/research/') ||
                 f.startsWith('docs/reviews/')
               );
             if (forbidden.length > 0) {
