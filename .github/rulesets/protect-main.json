@@ -45,6 +45,9 @@
         "required_status_checks": [
           {
             "context": "actionlint"
+          },
+          {
+            "context": "guard-docs / check-forbidden-docs"
           }
         ]
       }
