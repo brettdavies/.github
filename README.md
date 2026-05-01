@@ -27,10 +27,10 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-| | |
-|---|---|
-| **Trigger** | `workflow_call` (no inputs, no secrets) |
-| **Required caller permissions** | `contents: read` |
+|                                 |                                         |
+| ------------------------------- | --------------------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs, no secrets) |
+| **Required caller permissions** | `contents: read`                        |
 
 **Caller example:**
 
@@ -53,12 +53,12 @@ jobs:
 Full release pipeline: version check, audit, cross-platform build (5 targets), crates.io publish (Trusted Publishing
 OIDC), draft GitHub Release (notes extracted from CHANGELOG.md), Homebrew dispatch.
 
-| | |
-|---|---|
-| **Trigger** | `workflow_call` |
-| **Inputs** | `crate` (string, required), `bin` (string, required) |
-| **Secrets** | `CI_RELEASE_TOKEN` (required, explicit — not inherited) |
-| **Required caller permissions** | `contents: write`, `id-token: write` |
+|                                 |                                                         |
+| ------------------------------- | ------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                         |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required)    |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited) |
+| **Required caller permissions** | `contents: write`, `id-token: write`                    |
 
 **Caller example:**
 
@@ -84,11 +84,11 @@ jobs:
 
 Publishes a draft GitHub Release after Homebrew bottles are uploaded.
 
-| | |
-|---|---|
-| **Trigger** | `workflow_call` (no inputs) |
-| **Required caller permissions** | `contents: write` |
-| **Secrets** | None (only `GITHUB_TOKEN`, which flows automatically) |
+|                                 |                                                       |
+| ------------------------------- | ----------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs)                           |
+| **Required caller permissions** | `contents: write`                                     |
+| **Secrets**                     | None (only `GITHUB_TOKEN`, which flows automatically) |
 
 **Caller example:**
 
@@ -106,12 +106,13 @@ jobs:
 
 ### `guard-main-docs.yml`
 
-Blocks engineering docs (`docs/plans/`, `docs/solutions/`, `docs/brainstorms/`, `docs/reviews/`) from reaching main.
+Blocks engineering docs (`docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`, `docs/reviews/`,
+`docs/solutions/`) from reaching main.
 
-| | |
-|---|---|
-| **Trigger** | `workflow_call` (no inputs) |
-| **Required caller permissions** | `pull-requests: read` |
+|                                 |                             |
+| ------------------------------- | --------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs) |
+| **Required caller permissions** | `pull-requests: read`       |
 
 **Caller example:**
 
@@ -132,10 +133,10 @@ jobs:
 Rejects PRs to main whose head branch doesn't start with `release/`. Enforces the release-branch pattern so that `dev`
 is never a PR head (which keeps `deleteBranchOnMerge: true` compatible with a forever `dev` branch).
 
-| | |
-|---|---|
-| **Trigger** | `workflow_call` with optional `prefix` input (default `release/`) |
-| **Required caller permissions** | `pull-requests: read` |
+|                                 |                                                                   |
+| ------------------------------- | ----------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` with optional `prefix` input (default `release/`) |
+| **Required caller permissions** | `pull-requests: read`                                             |
 
 **Caller example:**
 
@@ -156,10 +157,10 @@ jobs:
 Starting points for GitHub branch protection, committed under `.github/rulesets/`. Consumer repos copy these into their
 own `.github/rulesets/` and extend the `required_status_checks` list with repo-specific checks.
 
-| Template | Purpose |
-|---|---|
+| Template            | Purpose                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `protect-main.json` | Squash-only PR merge, linear history, required signatures, `actionlint` required. Add repo-specific checks (`ci / <job>`, `guard-docs / check-forbidden-docs`, `Guard release branch pattern / check-release-branch-name`) before applying. |
-| `protect-dev.json` | Dev forever-branch protection: no deletion, no non-fast-forward, required signatures. No PR requirement at the ruleset level (enforced by convention + `guard-release-branch` on the main side). |
+| `protect-dev.json`  | Dev forever-branch protection: no deletion, no non-fast-forward, required signatures. No PR requirement at the ruleset level (enforced by convention + `guard-release-branch` on the main side).                                            |
 
 Apply with `gh api`:
 
@@ -195,6 +196,5 @@ Migrate to `@v1` semver tags when a third-party contributor or third+ consumer a
 
 ## Naming coupling
 
-The Homebrew dispatch chain assumes `formula name == crate name == repo name`.
-If a future tool breaks this coupling, add an optional `formula` input to `rust-release.yml` and update
-`homebrew-tap/publish.yml`.
+The Homebrew dispatch chain assumes `formula name == crate name == repo name`. If a future tool breaks this coupling,
+add an optional `formula` input to `rust-release.yml` and update `homebrew-tap/publish.yml`.
