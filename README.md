@@ -106,7 +106,8 @@ jobs:
 
 ### `guard-main-docs.yml`
 
-Blocks engineering docs (`docs/plans/`, `docs/solutions/`, `docs/brainstorms/`, `docs/reviews/`) from reaching main.
+Blocks engineering docs (`docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`, `docs/reviews/`,
+`docs/solutions/`) from reaching main.
 
 |                                 |                             |
 | ------------------------------- | --------------------------- |
