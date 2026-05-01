@@ -128,6 +128,37 @@ jobs:
     uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
 ```
 
+### `guard-main-provenance.yml`
+
+Verifies that every non-exempt commit in a PR to `main` carries a `(#N)` PR reference, indicating it was squash-merged
+from a feature PR to `dev`. Catches direct-pushes to `dev` or release branches that bypass the PR-review boundary.
+
+Skipped automatically for `release/*` head branches — cherry-picks from dev inherently lose their PR references, and the
+release PR itself is the review gate.
+
+Exempt commit-message prefixes: `docs:`, `chore:`, `ci:`, `style:`, `build:` (housekeeping commits authored directly on
+the release branch — version bumps, changelogs, CI tweaks). `test:` is **not** exempt — tests are code and must go
+through PRs.
+
+|                                 |                             |
+| ------------------------------- | --------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs) |
+| **Required caller permissions** | `pull-requests: read`       |
+
+**Caller example:**
+
+```yaml
+name: Guard main commit provenance
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  pull-requests: read
+jobs:
+  guard-provenance:
+    uses: brettdavies/.github/.github/workflows/guard-main-provenance.yml@main
+```
+
 ### `guard-release-branch.yml`
 
 Rejects PRs to main whose head branch doesn't start with `release/`. Enforces the release-branch pattern so that `dev`
