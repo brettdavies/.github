@@ -1,0 +1,17 @@
+name: probe sc2129 (verification only — do not merge)
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  trigger:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Multiple redirects (intentional SC2129)
+        run: |
+          echo foo >> "$GITHUB_ENV"
+          echo bar >> "$GITHUB_ENV"
+          echo baz >> "$GITHUB_ENV"
