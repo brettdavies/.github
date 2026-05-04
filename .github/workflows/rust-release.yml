@@ -115,12 +115,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every row declares `soft_fail` explicitly (true on the linux-musl
+        # rows, false on every other row). Implicit "no soft_fail key →
+        # hard-fail" reads naturally but breaks the `continue-on-error`
+        # expression below: `matrix.soft_fail` was undefined for non-musl
+        # rows, evaluating to `null && X` (= null) at job level, which GHA
+        # silently rejects — the entire build job's matrix expansion was
+        # skipped, taking publish-crate / release / homebrew with it (see
+        # agentnative-cli's failed v0.3.1 release run on 2026-05-04).
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            soft_fail: false
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             cross: true
+            soft_fail: false
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
             cross: true
@@ -131,16 +141,22 @@ jobs:
             soft_fail: true
           - os: macos-14
             target: aarch64-apple-darwin
+            soft_fail: false
           - os: macos-latest
             target: x86_64-apple-darwin
+            soft_fail: false
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            soft_fail: false
 
     runs-on: ${{ matrix.os }}
     # Soft-fail rows (currently the two linux-musl targets) fail open by
     # default. The release proceeds without their artifacts. Consumers
-    # opt into hard-fail by passing `linux_musl_required: true`.
-    continue-on-error: ${{ matrix.soft_fail && !inputs.linux_musl_required }}
+    # opt into hard-fail by passing `linux_musl_required: true`. The
+    # `== true` belt is paired with the `soft_fail: false` suspenders on
+    # every non-musl row above — together they make the expression
+    # always-boolean and make every row's stance grep-able.
+    continue-on-error: ${{ matrix.soft_fail == true && !inputs.linux_musl_required }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -202,7 +218,7 @@ jobs:
       # omitted artifact is loud in the run UI even though the release proceeds.
       # Skipped when the consumer opts into hard-fail (linux_musl_required: true).
       - name: Annotate soft-failed build
-        if: failure() && matrix.soft_fail && !inputs.linux_musl_required
+        if: failure() && matrix.soft_fail == true && !inputs.linux_musl_required
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
