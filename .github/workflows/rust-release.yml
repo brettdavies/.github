@@ -9,8 +9,13 @@
 #       with:
 #         crate: bird
 #         bin: bird
+#         linux_musl_required: true   # optional, default false
 #       secrets:
 #         CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
+#
+# Build matrix is 7 targets: x86_64/aarch64 linux-gnu, x86_64/aarch64 linux-musl,
+# x86_64/aarch64 darwin, x86_64 windows-msvc. The two musl rows soft-fail by
+# default; set linux_musl_required: true once a consumer has verified its build.
 #
 # Required caller permissions: contents: write, id-token: write
 name: Rust Release
@@ -26,6 +31,11 @@ on:
         description: "Binary name (e.g., bird, xr)"
         type: string
         required: true
+      linux_musl_required:
+        description: "Block release on linux-musl build failure. Default false: musl rows soft-fail and the artifact is omitted from the release. Set true once the consumer crate has verified it builds clean against musl."
+        type: boolean
+        required: false
+        default: false
     secrets:
       CI_RELEASE_TOKEN:
         description: "Fine-grained PAT with contents:write for release automation (Homebrew dispatch, changelog, rulesets)"
@@ -103,6 +113,14 @@ jobs:
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             cross: true
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            cross: true
+            soft_fail: true
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+            cross: true
+            soft_fail: true
           - os: macos-14
             target: aarch64-apple-darwin
           - os: macos-latest
@@ -111,6 +129,10 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
+    # Soft-fail rows (currently the two linux-musl targets) fail open by
+    # default. The release proceeds without their artifacts. Consumers
+    # opt into hard-fail by passing `linux_musl_required: true`.
+    continue-on-error: ${{ matrix.soft_fail && !inputs.linux_musl_required }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -156,6 +178,7 @@ jobs:
           fi
 
       - name: Build release
+        id: build
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -166,6 +189,24 @@ jobs:
             BUILD_CMD="cross"
           fi
           $BUILD_CMD build --release --locked --target "$TARGET"
+
+      # Soft-fail rows surface their failure as a job-summary warning so the
+      # omitted artifact is loud in the run UI even though the release proceeds.
+      # Skipped when the consumer opts into hard-fail (linux_musl_required: true).
+      - name: Annotate soft-failed build
+        if: failure() && matrix.soft_fail && !inputs.linux_musl_required
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          echo "::warning::${TARGET} build failed in soft-fail mode; artifact will be omitted from release"
+          {
+            echo "## ⚠️ \`${TARGET}\` build failed (soft-fail)"
+            echo ""
+            echo "This target is configured to fail open. The release will proceed without the \`${TARGET}\` artifact."
+            echo ""
+            echo "To make this target block the release, pass \`linux_musl_required: true\` from the caller's \`release.yml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ad-hoc codesign (macOS)
         if: runner.os == 'macOS'
