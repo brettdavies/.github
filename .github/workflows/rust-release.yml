@@ -234,9 +234,9 @@ jobs:
           # container can't write back. Direct exec of the binary (no shell
           # wrapping) so any dynamic-link surprise surfaces immediately.
           docker run --rm --pull always \
-            -v "$PWD/$BIN_DIR:/anc:ro" \
+            -v "$PWD/$BIN_DIR:/musl-bin:ro" \
             alpine:latest \
-            "/anc/${BINARY}" --version
+            "/musl-bin/${BINARY}" --version
 
       - name: Ad-hoc codesign (macOS)
         if: runner.os == 'macOS'
