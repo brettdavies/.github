@@ -54,12 +54,12 @@ Full release pipeline: version check, audit, cross-platform build (7 targets —
 soft-fail by default), crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes extracted from
 CHANGELOG.md), Homebrew dispatch.
 
-|                                 |                                                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                               |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                       |
-| **Required caller permissions** | `contents: write`, `id-token: write`                                                                          |
+|                                 |                                                                                                                                                                             |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                             |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                     |
+| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                        |
 
 **Caller example:**
 

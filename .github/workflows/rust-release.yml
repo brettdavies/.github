@@ -9,13 +9,16 @@
 #       with:
 #         crate: bird
 #         bin: bird
-#         linux_musl_required: true   # optional, default false
+#         linux_musl_required: true       # optional, default false
+#         linux_musl_verify_alpine: true  # optional, default false
 #       secrets:
 #         CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 #
 # Build matrix is 7 targets: x86_64/aarch64 linux-gnu, x86_64/aarch64 linux-musl,
 # x86_64/aarch64 darwin, x86_64 windows-msvc. The two musl rows soft-fail by
 # default; set linux_musl_required: true once a consumer has verified its build.
+# Set linux_musl_verify_alpine: true to additionally exec the x86_64 musl
+# binary inside alpine:latest as a belt-and-suspenders compatibility check.
 #
 # Required caller permissions: contents: write, id-token: write
 name: Rust Release
@@ -33,6 +36,11 @@ on:
         required: true
       linux_musl_required:
         description: "Block release on linux-musl build failure. Default false: musl rows soft-fail and the artifact is omitted from the release. Set true once the consumer crate has verified it builds clean against musl."
+        type: boolean
+        required: false
+        default: false
+      linux_musl_verify_alpine:
+        description: "Belt-and-suspenders: after building x86_64-unknown-linux-musl, run the binary inside an alpine:latest container to confirm musl-static actually exec-compatible (catches dlopen/NSS/locale surprises that pass `file --statically-linked`). Default false. Independent of linux_musl_required — failure semantics flow through that flag."
         type: boolean
         required: false
         default: false
@@ -207,6 +215,28 @@ jobs:
             echo ""
             echo "To make this target block the release, pass \`linux_musl_required: true\` from the caller's \`release.yml\`."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Belt-and-suspenders Alpine exec validation — opt-in via
+      # linux_musl_verify_alpine: true. x86_64 only; the static-link mechanism
+      # is identical across arches, so one Alpine confirmation closes the
+      # exec-compatibility question for both musl rows. Gated on success() so
+      # the binary actually exists. Failure flows through the same soft/hard
+      # path as the build itself (matrix.soft_fail + linux_musl_required).
+      - name: Verify musl binary exec-compatible with Alpine
+        if: success() && inputs.linux_musl_verify_alpine && matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ steps.binary.outputs.name }}
+        run: |
+          BIN_DIR="target/${TARGET}/release"
+          # --pull always defeats any stale cached image. -v read-only so the
+          # container can't write back. Direct exec of the binary (no shell
+          # wrapping) so any dynamic-link surprise surfaces immediately.
+          docker run --rm --pull always \
+            -v "$PWD/$BIN_DIR:/anc:ro" \
+            alpine:latest \
+            "/anc/${BINARY}" --version
 
       - name: Ad-hoc codesign (macOS)
         if: runner.os == 'macOS'
