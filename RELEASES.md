@@ -49,9 +49,10 @@ gh pr create --base dev --title "feat(scope): what changed"
 
 ## Releasing dev to main
 
-Engineering docs (`docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`, `docs/reviews/`,
-`docs/solutions/`) live on `dev` only. The `self-guard-main-docs.yml` workflow (this repo's self-applied caller of its
-own `guard-main-docs.yml` reusable) blocks them from reaching `main`. Use the release-branch cherry-pick pattern:
+Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
+`docs/reviews/`, `docs/solutions/`) live on `dev` only. The `self-guard-main-docs.yml` workflow (this repo's
+self-applied caller of its own `guard-main-docs.yml` reusable) blocks them from reaching `main`. Use the release-branch
+cherry-pick pattern:
 
 **Branch naming**: `release/<slug>` (e.g. `release/guard-release-branch`, `release/bootstrap-essentials`). Unlike the
 sibling Rust CLI repos, there is no `vX.Y.Z` version to encode in the branch name — there is no `Cargo.toml` to bump and
@@ -93,7 +94,7 @@ git diff origin/dev..origin/main --stat | tail -5                               
 #
 # Re-confirm no guarded paths leaked:
 git diff origin/main..HEAD --name-only \
-  | grep -E '^(docs/plans|docs/brainstorms|docs/ideation|docs/research|docs/reviews|docs/solutions|\.context)' \
+  | grep -E '^(docs/architecture|docs/brainstorms|docs/ideation|docs/plans|docs/research|docs/reviews|docs/solutions|\.context)' \
   && echo "LEAKED — reset and redo" || echo "(clean — no guarded paths)"
 #
 # Patch-id cherry check — catches commits on dev that have NO patch-id
