@@ -1,6 +1,6 @@
 # Self-applied caller for this repo's own guard-main-docs reusable workflow.
-# Blocks compound-engineering docs (docs/plans/, docs/solutions/, docs/brainstorms/,
-# docs/ideation/, docs/research/, docs/reviews/) from being merged into main.
+# Blocks compound-engineering docs (docs/architecture/, docs/brainstorms/, docs/ideation/,
+# docs/plans/, docs/research/, docs/reviews/, docs/solutions/) from being merged into main.
 #
 # Filename differs from the reusable (guard-main-docs.yml) to avoid a
 # self-collision. Job key matches the standard convention so the status
