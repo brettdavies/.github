@@ -48,9 +48,11 @@ documented in [`README.md`](README.md#ref-pinning)), reintroduce the tag step an
 
 ### No explainer prose in the body
 
-Every section of a PR body is user-facing substance only: what is changing for the consumer that was not already there.
-Workflow mechanics (cherry-pick, triple-diff verification, CI behavior) are documented in this file, in `RELEASES.md`,
-and in `.github/`, NOT in the PR body. Triple-diff output, CI check status, exclusion rationale, and other verification
+Every section of a PR body is user-facing substance only: what is changing for the consumer that was not already there —
+the **net diff**, not the commit history or intermediate state that produced it. Workflow mechanics (cherry-pick,
+triple-diff verification, CI behavior) are documented in this file, in `RELEASES.md`, and in `.github/`, NOT in the PR
+body. Triple-diff output ("A: 12 files, B: none, C: clean"), leak-check narration ("`guard-main-docs` runs clean", "no
+guarded paths leaked"), patch-id cherry-check counts, CI check status, exclusion rationale, and other verification
 artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
 
 The PR body is read by humans reviewing what shipped. Workflow mechanics and tool-fix provenance are noise from that
