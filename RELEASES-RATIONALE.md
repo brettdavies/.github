@@ -16,12 +16,15 @@ Read this when:
 
 `dev` is never deleted, even after a `release/* → main` merge. The next release cycle reuses the same `dev`. The repo's
 `deleteBranchOnMerge: true` setting doesn't touch `dev` as long as `dev` is never the head of a PR. Using a short-lived
-`release/*` head is what keeps the setting compatible with a forever integration branch. The `guard-release-branch.yml`
-workflow (self-applied to this repo) enforces the `release/*` head pattern at the PR level.
+`release/*` head is what keeps the setting compatible with a forever integration branch. The `release/*` head pattern is
+a convention here; the `guard-release-branch.yml` reusable workflow that ships from this repo enforces it for any
+consumer that wires it up, but this repo does not currently self-apply it.
 
 Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
 `docs/reviews/`, `docs/solutions/`) live on `dev` only. The `self-guard-main-docs.yml` workflow (this repo's
-self-applied caller of its own `guard-main-docs.yml` reusable) blocks them from reaching `main`.
+self-applied caller of its own `guard-main-docs.yml` reusable) blocks them from reaching `main`. The other guard
+reusables shipped from this repo (`guard-main-provenance.yml`, `guard-release-branch.yml`) are not currently
+self-applied here; consumers wire them up themselves.
 
 ### Why branch from `main`, not `dev`
 
@@ -46,9 +49,9 @@ documented in [`README.md`](README.md#ref-pinning)), reintroduce the tag step an
 ### No explainer prose in the body
 
 Every section of a PR body is user-facing substance only: what is changing for the consumer that was not already there.
-Workflow mechanics (cherry-pick, regenerate, pre-push gate, CI behavior) are documented in this file, in `RELEASES.md`,
-and in `.github/`, NOT in the PR body. Triple-diff output, pre-push gate results, CI check status, exclusion rationale,
-and other verification artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
+Workflow mechanics (cherry-pick, triple-diff verification, CI behavior) are documented in this file, in `RELEASES.md`,
+and in `.github/`, NOT in the PR body. Triple-diff output, CI check status, exclusion rationale, and other verification
+artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
 
 The PR body is read by humans reviewing what shipped. Workflow mechanics and tool-fix provenance are noise from that
 perspective; they belong in this file, the script outputs, and the commit history respectively.
@@ -62,8 +65,8 @@ consolidations from the underlying `feat`/`fix`/`ci`/`docs` PRs that fed `dev`. 
 ## Triple-diff verification
 
 The release-PR procedure runs three diffs (A: main → release, B: release → dev for non-doc paths, C: dev → main) plus a
-patch-id cherry check. This is belt-and-suspenders because missed cherry-picks have shipped to `main` on this and
-sibling repos before, and the file-level diff in B alone doesn't catch the patch-id false-negative class.
+patch-id cherry check. This is belt-and-suspenders because missed cherry-picks are a real failure mode in squash-merge
+workflows, and the file-level diff in B alone doesn't catch the patch-id false-negative class.
 
 ### Why patch-id cherry-check output is noisy
 
@@ -112,14 +115,16 @@ paths so the body keeps its authored shape and no soft-wrapping is injected.
 
 ## Self-applied reusable workflows
 
-This repo is unusual: the reusable workflows it ships are also self-applied to itself, so a PR exercises the PR's own
-version of each workflow rather than the merged-to-`main` version. This catches regressions on the PR that introduces
-them rather than after the workflow has shipped to consumer repos.
+Some of the reusable workflows this repo ships have a thin self-applied caller. When a self-applied caller exists, a PR
+to this repo exercises the PR's version of the reusable (via a `./...` local-path reference) rather than the
+merged-to-`main` version, catching regressions on the PR that introduces them rather than after the workflow has shipped
+to consumer repos. Currently only `guard-main-docs.yml` is wired this way (via `self-guard-main-docs.yml`); the
+`guard-main-provenance.yml` and `guard-release-branch.yml` reusables are shipped but not self-applied here.
 
-The self-applied caller filename always differs from the reusable to avoid a self-collision, and the `uses:` reference
-uses the `./...` local-path form so the caller exercises the PR's version. Pattern: when adding a new reusable workflow,
-also add a thin self-applied caller (different filename, `./...` path reference, job-key matching the standard
-convention so the status-check name is stable).
+The self-applied caller filename always differs from the reusable to avoid a self-collision. Pattern for any future
+guard reusable: add a thin self-applied caller (different filename, `./...` path reference, job-key matching the
+standard convention so the status-check name is stable). The Rust-oriented reusables (`rust-ci.yml`, `rust-release.yml`,
+`rust-finalize-release.yml`) are not self-applied because this repo is not a Rust crate.
 
 ## Branch protection
 

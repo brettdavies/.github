@@ -166,8 +166,8 @@ Two rulesets are committed under `.github/rulesets/` and applied to the repo via
 
 - **`protect-main.json`**: required signatures, linear history, squash-only merges via PR, required status checks,
   creation/deletion blocked, non-fast-forward blocked.
-- **`protect-dev.json`**: required signatures, deletion blocked, non-fast-forward blocked. The PR-only norm is enforced
-  by convention plus the `guard-release-branch` self-applied workflow on the main side.
+- **`protect-dev.json`**: required signatures, deletion blocked, non-fast-forward blocked. The PR-only norm into `dev`
+  is enforced by convention; there is no automation gating it.
 
 ```bash
 gh api -X POST repos/brettdavies/.github/rulesets --input .github/rulesets/protect-dev.json
