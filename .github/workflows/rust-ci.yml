@@ -91,6 +91,32 @@ jobs:
       - name: Dry-run publish
         run: cargo publish --dry-run
 
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+
+      - name: Run shellcheck
+        run: |
+          mapfile -t shell_files < <({
+            git ls-files '*.sh' 2>/dev/null
+            git ls-files 'scripts/hooks/*' 2>/dev/null
+          } | sort -u)
+          if [ ${#shell_files[@]} -eq 0 ]; then
+            echo "No tracked shell scripts found. Skipping."
+            exit 0
+          fi
+          printf 'Linting %d file(s):\n' "${#shell_files[@]}"
+          printf '  %s\n' "${shell_files[@]}"
+          shellcheck --severity=warning "${shell_files[@]}"
+
   changelog-check:
     name: Changelog
     if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
