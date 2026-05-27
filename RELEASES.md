@@ -46,6 +46,10 @@ gh pr create --base dev --title "feat(scope): what changed"
 - **PR body**: follow [`.github/pull_request_template.md`](.github/pull_request_template.md). The `## Changelog` section
   is reserved for any future changelog automation; this repo does not currently generate a `CHANGELOG.md`, but consumer
   repos do, so the convention is preserved.
+- **No explainer prose anywhere in the body.** Every section is user-facing substance only — what is changing for the consumer that was not already there. `## Summary` is one short paragraph. Do NOT recap the workflow (cherry-pick / regenerate / pre-push gate / CI behavior is documented in this file and `.github/`). Do NOT paste triple-diff output, pre-push gate results, CI check status, exclusion rationale, or other verification artifacts into the body. Those stay local; anomalies get fixed before push, not audit-trailed in the body.
+- **PR body prose scrub**: `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check sees it.
+  Save the body to `/tmp/`, run Vale + LanguageTool + unslop, fix findings, then submit via `--body-file`. See
+  [§ Prose scrubbing](#prose-scrubbing).
 
 ## Releasing dev to main
 
@@ -127,9 +131,14 @@ git diff origin/main..HEAD --name-only \
 # triple-diff.
 git cherry HEAD origin/dev | grep '^+' || echo "(none — release is patch-equivalent through dev)"
 
-# 5. Push and open the PR:
+# 5. Draft the release-PR body. This text is wrap-up prose contributors edit
+#    after cherry-picks land; like any other PR body it bypasses local md
+#    checks. Scrub it through Vale + LanguageTool + unslop before submitting.
+#    See "Prose scrubbing" below for the procedure.
+
+# 6. Push and open the PR:
 git push -u origin release/<slug>
-gh pr create --base main --head release/<slug> --title "release: <description>"
+gh pr create --base main --head release/<slug> --title "release: <description>" --body-file /tmp/body.md
 ```
 
 When the PR merges, consumer repos pinning `@main` will pick up the change on their next workflow run. Auto-delete
@@ -149,6 +158,51 @@ all no-ops here. The release PR is just the cherry-picked commits; merging it is
 
 If a future change introduces a versioned ref (e.g. migrating consumers from `@main` to `@v1` per the trigger documented
 in [`README.md`](README.md#ref-pinning)), reintroduce the tag step and revisit this section.
+
+## Prose scrubbing
+
+Three release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
+
+- **PR bodies on feature → dev PRs.** `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check
+  sees it.
+- **Release-PR bodies on `release/* → main` PRs.** Same out-of-repo gap. These bodies are usually written after the
+  cherry-picks land and tend to be the longest, most-read prose this repo produces.
+- **Workflow `description:` strings, comments, and any inline prose inside `.github/workflows/*.yml`.** YAML files are
+  not covered by the same markdown-targeted prose checks, but the strings users see in the GitHub Actions UI come from
+  here.
+
+This repo does not vendor a Vale or LanguageTool configuration of its own. Point Vale at the spec repo's checkout for
+the rule packs; the orchestrator behavior and rule-pack inventory are documented at
+[`~/dev/agentnative-spec/docs/architecture/voice-enforcement.md`](../agentnative-spec/docs/architecture/voice-enforcement.md).
+
+The scrub procedure:
+
+```bash
+# 1. Save the artifact to /tmp/. The auto-format hook skips /tmp paths, so the
+#    body keeps its authored shape and no soft-wrapping is injected.
+gh pr view <num> --json body --jq .body > /tmp/body.md         # for PR body edits
+# cp CHANGELOG.md /tmp/body.md                                 # for changelog scrub (n/a in this repo)
+
+# 2. Vale (against the spec's rule packs — until vendored locally, point at the spec checkout).
+vale --no-global --config ~/dev/agentnative-spec/.vale.ini --output=line --minAlertLevel=error /tmp/body.md
+
+# 3. LanguageTool (blocking categories: TYPOS|GRAMMAR|CONFUSED_WORDS, mirrors the orchestrator's whitelist).
+curl -sS -X POST "${LANGUAGETOOL_URL:-http://pool.tail42ba87.ts.net:8081}/v2/check" \
+  --data-urlencode "language=en-US" --data-urlencode "text@/tmp/body.md" \
+  | jaq '.matches[] | select(.rule.category.id | test("^(TYPOS|GRAMMAR|CONFUSED_WORDS)$"))'
+
+# 4. unslop (em-dash density and AI-unique structural patterns Vale + LT do not catch).
+~/.claude/skills/unslop/scripts/score.py /tmp/body.md
+
+# 5. Apply fixes per finding. Re-run until 0 blocking and unslop score is 0.
+
+# 6. Apply the cleaned version.
+gh pr edit <num> --body-file /tmp/body.md     # for PR body edits
+# (regenerate CHANGELOG.md per the repo's existing changelog flow — n/a in this repo)
+```
+
+For workflow YAML prose, copy the relevant `description:` strings or comment blocks into `/tmp/body.md`, run the same
+checks, then paste the cleaned text back into the YAML file.
 
 ## Self-applied reusable workflows
 
