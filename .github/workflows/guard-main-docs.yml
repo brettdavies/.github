@@ -6,11 +6,29 @@
 #     guard-docs:
 #       uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
 #
+# Caller with extra paths (extends the hardcoded base list):
+#   jobs:
+#     guard-docs:
+#       uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
+#       with:
+#         extra_paths: 'styles/,.vale.ini,scripts/prose-check.sh'
+#
 # Required caller permissions: pull-requests: read
 name: Guard main from engineering docs
 
 on:
   workflow_call:
+    inputs:
+      extra_paths:
+        description: |
+          Comma-separated list of additional paths to forbid alongside the
+          hardcoded engineering-docs base list. Entries ending with `/` match
+          by prefix (e.g. `styles/`); other entries match by exact filename
+          (e.g. `.vale.ini`). Empty by default — callers that only need the
+          base list omit this input.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   pull-requests: read
@@ -25,6 +43,8 @@ jobs:
       - name: Get changed files
         id: changed
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          EXTRA_PATHS: ${{ inputs.extra_paths }}
         with:
           script: |
             const { data: files } = await github.rest.pulls.listFiles({
@@ -33,21 +53,31 @@ jobs:
               pull_number: context.issue.number,
               per_page: 100,
             });
+            const baseHardcoded = [
+              'docs/architecture/',
+              'docs/brainstorms/',
+              'docs/ideation/',
+              'docs/plans/',
+              'docs/research/',
+              'docs/reviews/',
+              'docs/solutions/',
+            ];
+            const extra = (process.env.EXTRA_PATHS || '')
+              .split(',')
+              .map(s => s.trim())
+              .filter(s => s.length > 0);
+            const allPatterns = [...baseHardcoded, ...extra];
             const forbidden = files
               .filter(f => f.status === 'added' || f.status === 'modified')
               .map(f => f.filename)
               .filter(f =>
-                f.startsWith('docs/architecture/') ||
-                f.startsWith('docs/brainstorms/') ||
-                f.startsWith('docs/ideation/') ||
-                f.startsWith('docs/plans/') ||
-                f.startsWith('docs/research/') ||
-                f.startsWith('docs/reviews/') ||
-                f.startsWith('docs/solutions/')
+                allPatterns.some(p =>
+                  p.endsWith('/') ? f.startsWith(p) : f === p
+                )
               );
             if (forbidden.length > 0) {
               core.setFailed(
-                `Compound-engineering docs must not be merged into main:\n` +
+                `Forbidden paths must not be merged into main:\n` +
                 forbidden.map(f => `  - ${f}`).join('\n')
               );
             } else {
