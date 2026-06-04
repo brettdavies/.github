@@ -118,15 +118,12 @@ jobs:
           shopt -s nullglob
           workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
 
-          {
-            echo '## GitHub Actions pin drift'
-            echo
-            echo '| Workflow | Action | Pinned SHA (comment) | Latest tag | Drift |'
-            echo '| --- | --- | --- | --- | --- |'
-          } >> "$GITHUB_STEP_SUMMARY"
-
           drift_count=0
           processed=()
+          # shellcheck disable=SC2034  # appended via newer_rows+=("$row") below
+          newer_rows=()
+          # shellcheck disable=SC2034  # appended via ok_rows+=("$row") below
+          ok_rows=()
 
           # Strict shape: `uses: <owner>/<repo>[/path...]@<ref>` at start of
           # line after whitespace, allowing the optional `- ` YAML list-item
@@ -169,22 +166,47 @@ jobs:
                   2>/dev/null || echo 'n/a')"
               fi
 
+              row="$(printf '| %s | %s | %s | %s |' \
+                "$wf_name" "$repo" "${comment:-(no comment)}" "$latest")"
+
               if [ "$latest" != "n/a" ] \
                   && [ -n "$comment" ] \
                   && [ "$comment" != "$latest" ]; then
-                drift="**newer**"
+                newer_rows+=("$row")
                 drift_count=$((drift_count + 1))
               else
-                drift="ok"
+                ok_rows+=("$row")
               fi
-
-              printf '| %s | %s | %s | %s | %s |\n' \
-                "$wf_name" "$repo" "${comment:-(no comment)}" \
-                "$latest" "$drift" >> "$GITHUB_STEP_SUMMARY"
             done < <(grep -E "$uses_re" "$wf" || true)
           done
 
+          # Emit sorted summary: newer-section first (drift, actionable),
+          # then ok-section (informational).
           {
+            echo '## GitHub Actions pin drift'
             echo
+            if [ "${#newer_rows[@]}" -gt 0 ]; then
+              echo "### \`newer\` (${#newer_rows[@]}) — needs attention"
+              echo
+              echo '| Workflow | Action | Pinned (comment) | Latest tag |'
+              echo '| --- | --- | --- | --- |'
+              printf '%s\n' "${newer_rows[@]}"
+              echo
+            fi
+            if [ "${#ok_rows[@]}" -gt 0 ]; then
+              echo "### \`ok\` (${#ok_rows[@]}) — up to date"
+              echo
+              echo '| Workflow | Action | Pinned (comment) | Latest tag |'
+              echo '| --- | --- | --- | --- |'
+              printf '%s\n' "${ok_rows[@]}"
+              echo
+            fi
             echo "_Total entries with drift: ${drift_count}_"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Fail the job if any pin drifted, so the run flags red in the
+          # Actions UI rather than quietly reporting in the summary tab.
+          if [ "$drift_count" -gt 0 ]; then
+            echo "::warning::${drift_count} action pin(s) have newer releases; review the summary above."
+            exit 1
+          fi
