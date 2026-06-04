@@ -1,0 +1,179 @@
+# Reusable preflight workflow: enumerate pending dependency updates before
+# cutting a release branch, so they can be merged on dev (or rejected) rather
+# than landing as Dependabot PRs the moment the release commit hits the
+# target branch.
+#
+# Two ecosystems supported:
+#   - `cargo` — runs `cargo outdated --workspace --depth 1` and writes the
+#     report to $GITHUB_STEP_SUMMARY. Exits non-zero if any direct dep has
+#     a newer compatible version available (so the run flags red in the UI
+#     to signal "needs attention").
+#   - `github-actions` — diffs every `uses: <action>@<sha>` line against the
+#     resolved latest tag of the action's repo. Writes drift to summary.
+#
+# Caller example (workflow_dispatch wrapper):
+#
+#   name: Dependabot Preflight
+#   on:
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#     pull-requests: read
+#   jobs:
+#     preflight:
+#       uses: brettdavies/.github/.github/workflows/dependabot-preflight.yml@<sha>
+#
+# Run from Actions tab → "Dependabot Preflight" → "Run workflow" before
+# starting RELEASES-PREFLIGHT.md. If pending updates exist, merge them on
+# dev (or trigger Dependabot via Insights → Dependency graph → Dependabot)
+# BEFORE cutting the release branch.
+name: Dependabot Preflight
+
+on:
+  workflow_call:
+    inputs:
+      ecosystems:
+        description: 'Comma-separated ecosystems to scan (cargo, github-actions)'
+        required: false
+        type: string
+        default: 'cargo,github-actions'
+      cargo_fail_on_outdated:
+        description: 'Exit non-zero when cargo deps have newer compatible versions'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  cargo:
+    if: contains(inputs.ecosystems, 'cargo')
+    name: Cargo outdated check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: dependabot-preflight
+
+      - name: Install cargo-outdated
+        uses: taiki-e/install-action@be7c31b6745feec79dec5eb79178466c0670bb2d # v2.62.20
+        with:
+          tool: cargo-outdated
+
+      - name: Run cargo outdated
+        id: outdated
+        env:
+          FAIL: ${{ inputs.cargo_fail_on_outdated }}
+        run: |
+          set -o pipefail
+          {
+            echo '## Cargo outdated (direct dependencies)'
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # `--exit-code 1` makes cargo-outdated return non-zero when any
+          # direct dep has a newer compatible version. Capture into a file
+          # so we can tee to both the step summary and the action log.
+          if cargo outdated --workspace --depth 1 -R --exit-code 1 \
+              | tee /tmp/outdated.txt; then
+            outdated_count=0
+          else
+            outdated_count=1
+          fi
+          cat /tmp/outdated.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "outdated_count=$outdated_count" >> "$GITHUB_OUTPUT"
+
+          if [ "$outdated_count" -gt 0 ] && [ "$FAIL" = "true" ]; then
+            echo "::warning::Cargo deps have available updates; review the report above before cutting the release."
+            exit 1
+          fi
+
+  github-actions:
+    if: contains(inputs.ecosystems, 'github-actions')
+    name: GitHub Actions pin-drift check
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Enumerate pinned actions and resolve latest tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+
+          {
+            echo '## GitHub Actions pin drift'
+            echo
+            echo '| Workflow | Action | Pinned SHA (comment) | Latest tag | Drift |'
+            echo '| --- | --- | --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          drift_count=0
+          processed=()
+
+          for wf in "${workflows[@]}"; do
+            wf_name="$(basename "$wf")"
+            # Extract `owner/repo@sha # comment` triples; skip local paths
+            # and `./.github/...` re-uses.
+            while IFS= read -r line; do
+              ref="$(echo "$line" \
+                | sed -E 's/^[[:space:]]*uses:[[:space:]]*//; s/[[:space:]]+$//')"
+              [[ "$ref" == ./* ]] && continue
+              [[ "$ref" != */*@* ]] && continue
+              repo="${ref%@*}"
+              sha_and_comment="${ref#*@}"
+              sha="$(echo "$sha_and_comment" | awk '{print $1}')"
+              comment="$(echo "$sha_and_comment" \
+                | sed -E 's/^[^#]*#[[:space:]]*//; t; d')"
+
+              # Dedup: same repo+sha appears in many workflows
+              key="$repo@$sha"
+              if printf '%s\n' "${processed[@]}" | grep -qxF "$key"; then
+                continue
+              fi
+              processed+=("$key")
+
+              # Resolve latest release tag for the action's repo
+              latest="$(gh api "repos/$repo/releases/latest" \
+                --jq '.tag_name' 2>/dev/null || true)"
+              if [ -z "$latest" ]; then
+                latest="$(gh api "repos/$repo/tags" --jq '.[0].name' \
+                  2>/dev/null || echo 'n/a')"
+              fi
+
+              if [ "$latest" != "n/a" ] \
+                  && [ -n "$comment" ] \
+                  && [ "$comment" != "$latest" ]; then
+                drift="**newer**"
+                drift_count=$((drift_count + 1))
+              else
+                drift="ok"
+              fi
+
+              printf '| %s | %s | %s | %s | %s |\n' \
+                "$wf_name" "$repo" "${comment:-(no comment)}" \
+                "$latest" "$drift" >> "$GITHUB_STEP_SUMMARY"
+            done < <(grep -E '^[[:space:]]*uses:[[:space:]]' "$wf" || true)
+          done
+
+          {
+            echo
+            echo "_Total entries with drift: $drift_count_"
+          } >> "$GITHUB_STEP_SUMMARY"
