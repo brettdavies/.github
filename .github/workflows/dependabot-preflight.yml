@@ -128,16 +128,27 @@ jobs:
           drift_count=0
           processed=()
 
+          # Strict shape: `uses: <owner>/<repo>[/path...]@<ref>` at start of
+          # line after whitespace, allowing the optional `- ` YAML list-item
+          # prefix used for `steps: - uses: ...`. Owner segment must start
+          # with an alphanumeric so embedded shell strings (e.g. `grep '...
+          # uses: ...'`) and comment-style placeholders (`uses: <action>@<sha>`)
+          # don't match.
+          uses_re='^[[:space:]]*-?[[:space:]]*uses:[[:space:]]+[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._/-]+@[A-Za-z0-9._/-]+'
+
           for wf in "${workflows[@]}"; do
             wf_name="$(basename "$wf")"
-            # Extract `owner/repo@sha # comment` triples; skip local paths
-            # and `./.github/...` re-uses.
+            # Extract `owner/repo@sha # comment` triples; skip local paths,
+            # `./.github/...` re-uses, and first-party brettdavies/... refs
+            # (carve-out: first-party reusables intentionally use @main,
+            # see ~/.claude/guides/supply-chain-pinning.md).
             while IFS= read -r line; do
               ref="$(echo "$line" \
-                | sed -E 's/^[[:space:]]*uses:[[:space:]]*//; s/[[:space:]]+$//')"
+                | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]]+$//')"
               [[ "$ref" == ./* ]] && continue
               [[ "$ref" != */*@* ]] && continue
               repo="${ref%@*}"
+              [[ "$repo" == brettdavies/* ]] && continue
               sha_and_comment="${ref#*@}"
               sha="$(echo "$sha_and_comment" | awk '{print $1}')"
               comment="$(echo "$sha_and_comment" \
@@ -170,7 +181,7 @@ jobs:
               printf '| %s | %s | %s | %s | %s |\n' \
                 "$wf_name" "$repo" "${comment:-(no comment)}" \
                 "$latest" "$drift" >> "$GITHUB_STEP_SUMMARY"
-            done < <(grep -E '^[[:space:]]*uses:[[:space:]]' "$wf" || true)
+            done < <(grep -E "$uses_re" "$wf" || true)
           done
 
           {
