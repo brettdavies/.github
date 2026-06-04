@@ -175,5 +175,5 @@ jobs:
 
           {
             echo
-            echo "_Total entries with drift: $drift_count_"
+            echo "_Total entries with drift: ${drift_count}_"
           } >> "$GITHUB_STEP_SUMMARY"
