@@ -1,0 +1,23 @@
+# Self-scan caller: runs the dependabot-preflight reusable against this repo's
+# own workflows. Consumer repos (bird, xurl-rs, agentnative-cli, …) wire a
+# parallel caller that scans their own workflows; pin drift in this repo's
+# reusable workflows surfaces here so the fix lands at the source rather than
+# noisily appearing in every consumer's report.
+#
+# Trigger from Actions → "Dependabot Preflight (self)" → "Run workflow".
+# Run before tagging this repo or before bumping any consumer that pins it at
+# a specific SHA.
+name: Dependabot Preflight (self)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    uses: ./.github/workflows/dependabot-preflight.yml
+    with:
+      # This repo is workflows-only; no Cargo.toml. Skip the cargo job.
+      ecosystems: github-actions
