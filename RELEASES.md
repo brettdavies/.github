@@ -48,7 +48,7 @@ Every PR (feature, fix, docs, release) uses `.github/pull_request_template.md` v
 - **Summary describes the net diff only** — what merged `main` looks like vs the base branch. Not commit history,
   or intermediate state.
 - **Zero verification artifacts in the body.** No leak-check output ("`guard-main-docs` runs clean"),
-  patch-id cherry-check counts, pre-push gate results, CI status, or prose-scrub findings. Anomalies get fixed before
+  pre-push gate results, CI status, or prose-scrub findings. Anomalies get fixed before
   push, not audit-trailed.
 - **Changelog** subsections (`### Added` / `### Changed` / `### Fixed` / `### Documentation`): 1-5 bullets each, delete
   empty subsections, each bullet starts with a verb.
@@ -70,7 +70,7 @@ retired `dev` branch.
 
 ## Prose scrubbing
 
-Three release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
+Two release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
 
 - PR bodies on PRs to `main`.
 - `description:` strings, comments, and any inline prose inside `.github/workflows/*.yml`.
@@ -108,7 +108,7 @@ checks, then paste the cleaned text back into the YAML file.
 | Self-applied workflow      | Calls reusable                            | Why local-path reference                                                                                                                                                  |
 | -------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `self-guard-main-docs.yml` | `./.github/workflows/guard-main-docs.yml` | Filename differs from the reusable to avoid a self-collision; uses `./...` so the caller exercises the PR's version, catching regressions on the PR that introduces them. |
-| `lint.yml`                 | (inline) `reviewdog/action-actionlint`    | Repo-internal; runs `actionlint` on every workflow file in the repo on every PR.                                                                                          |
+| `lint.yml`                 | `./.github/workflows/lint-basics.yml`     | Repo-internal PR gate; the local path exercises the PR head version of the reusable.                                                                                          |
 
 When adding a new reusable workflow, also add a thin self-applied caller (different filename, `./...` path reference,
 job-key matching the standard convention so the status-check name is stable).
