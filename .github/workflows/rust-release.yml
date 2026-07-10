@@ -323,11 +323,15 @@ jobs:
       - name: Extract release notes from CHANGELOG.md
         id: changelog
         run: |
-          # Extract the latest version section (between first and second ## headers)
-          NOTES=$(awk '/^## \[/{if(n++)exit}n' CHANGELOG.md)
+          # Anchor on the section whose '## ' heading contains the tag's version,
+          # not blindly the first section: a tag cut before its changelog entry
+          # landed, or an '## [Unreleased]' block at the top, would otherwise
+          # ship the wrong section silently. check-version has already verified
+          # the tag matches the crate version.
+          NOTES=$(awk -v ver="${GITHUB_REF_NAME#v}" '/^## /{if(f)exit; if(index($0,ver))f=1} f' CHANGELOG.md)
           if [ -z "$NOTES" ]; then
-            echo "::warning::No release notes found in CHANGELOG.md"
-            NOTES="Release ${GITHUB_REF_NAME}"
+            echo "::warning::No CHANGELOG.md section for ${GITHUB_REF_NAME}; falling back to generated notes"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
           fi
           {
             echo "content<<EOF"
@@ -362,6 +366,7 @@ jobs:
         with:
           files: release/*
           body: ${{ steps.changelog.outputs.content }}
+          generate_release_notes: ${{ steps.changelog.outputs.generate == 'true' }}
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
