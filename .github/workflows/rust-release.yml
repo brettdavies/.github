@@ -61,6 +61,7 @@ jobs:
   validate-inputs:
     name: Validate inputs
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Validate crate and bin names
         env:
@@ -79,6 +80,7 @@ jobs:
   check-version:
     needs: validate-inputs
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -98,6 +100,7 @@ jobs:
   audit:
     needs: validate-inputs
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     strategy:
       matrix:
         checks: [advisories, "bans licenses sources"]
@@ -150,6 +153,7 @@ jobs:
             soft_fail: false
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     # Soft-fail rows (currently the two linux-musl targets) fail open by
     # default. The release proceeds without their artifacts. Consumers
     # opt into hard-fail by passing `linux_musl_required: true`. The
@@ -291,6 +295,7 @@ jobs:
   publish-crate:
     needs: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
     permissions:
       id-token: write
       contents: read
@@ -315,6 +320,7 @@ jobs:
   release:
     needs: [build, publish-crate]
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -374,6 +380,7 @@ jobs:
   homebrew:
     needs: release
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Dispatch Homebrew formula update
         env:

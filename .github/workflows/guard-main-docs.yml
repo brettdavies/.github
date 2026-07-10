@@ -39,6 +39,7 @@ env:
 jobs:
   check-forbidden-docs:
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Get changed files
         id: changed
