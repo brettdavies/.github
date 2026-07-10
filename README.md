@@ -230,3 +230,14 @@ Migrate to `@v1` semver tags when a third-party contributor or third+ consumer a
 
 The Homebrew dispatch chain assumes `formula name == crate name == repo name`. If a future tool breaks this coupling,
 add an optional `formula` input to `rust-release.yml` and update `homebrew-tap/publish.yml`.
+
+## Local hooks
+
+`scripts/hooks/` carries `pre-commit` (actionlint + markdownlint on staged files) and `pre-push` (actionlint,
+markdownlint, shellcheck across the repo), mirroring the CI lint gate locally. Activate per clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+Each check no-ops with a notice when its tool is not installed.
