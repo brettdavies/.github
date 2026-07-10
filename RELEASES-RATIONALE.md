@@ -108,7 +108,7 @@ workflow ships.
 ## Consumer adoption and ref pinning
 
 The "distribution channel" for this repo is the `uses:` line in a consumer repo's workflow. There is no registry, no
-tag, no GitHub Release artifact. Merging a `release/* → main` PR makes the change available to every consumer that pins
+tag, no GitHub Release artifact. Merging a feature PR to `main` makes the change available to every consumer that pins
 `@main` on their next workflow run.
 
 Ref pinning policy lives in [`README.md`](README.md#ref-pinning):

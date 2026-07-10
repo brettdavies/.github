@@ -46,8 +46,8 @@ Every PR (feature, fix, docs, release) uses `.github/pull_request_template.md` v
 
 - **No explainer prose anywhere in the body.** User-facing substance only.
 - **Summary describes the net diff only** — what merged `main` looks like vs the base branch. Not commit history,
-  intermediate state, or cherry-pick mechanics.
-- **Zero verification artifacts in the body.** No triple-diff stats, leak-check output ("`guard-main-docs` runs clean"),
+  or intermediate state.
+- **Zero verification artifacts in the body.** No leak-check output ("`guard-main-docs` runs clean"),
   patch-id cherry-check counts, pre-push gate results, CI status, or prose-scrub findings. Anomalies get fixed before
   push, not audit-trailed.
 - **Changelog** subsections (`### Added` / `### Changed` / `### Fixed` / `### Documentation`): 1-5 bullets each, delete
