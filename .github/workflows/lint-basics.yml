@@ -1,4 +1,4 @@
-# Reusable actionlint + markdownlint for meum-id repos.
+# Reusable actionlint + markdownlint for brettdavies repos.
 #
 # `pull-requests: read` on the actionlint job carries control's private-repo
 # reviewdog note: reviewdog reads the PR diff to scope findings, which a
