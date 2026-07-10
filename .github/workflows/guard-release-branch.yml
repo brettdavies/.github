@@ -42,6 +42,7 @@ env:
 jobs:
   check-release-branch-name:
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Verify head branch matches prefix
         env:

@@ -25,6 +25,7 @@ jobs:
   check:
     name: Fmt, clippy, test
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -48,6 +49,7 @@ jobs:
   check-windows:
     name: Windows check
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -63,6 +65,7 @@ jobs:
   audit:
     name: Security audit
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     strategy:
       matrix:
         checks: [advisories, "bans licenses sources"]
@@ -76,6 +79,7 @@ jobs:
   package-check:
     name: Package check
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -94,6 +98,7 @@ jobs:
   shellcheck:
     name: Shellcheck
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -121,6 +126,7 @@ jobs:
     name: Changelog
     if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     permissions:
       pull-requests: read
     steps:

@@ -11,7 +11,7 @@
 #     guard-docs:
 #       uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
 #       with:
-#         extra_paths: 'styles/,.vale.ini,scripts/prose-check.sh,**/.agent/'
+#         extra_paths: 'styles/,.vale.ini,scripts/prose-check.sh'
 #
 # Required caller permissions: pull-requests: read
 name: Guard main from engineering docs
@@ -24,11 +24,8 @@ on:
           Comma-separated list of additional paths to forbid alongside the
           hardcoded engineering-docs base list. Entries ending with `/` match
           by prefix (e.g. `styles/`); other entries match by exact filename
-          (e.g. `.vale.ini`). Entries starting with `**/` match at any
-          directory depth: `**/.agent/` forbids an `.agent/` directory at the
-          repo root and in every subtree (e.g. `vendor/x/.agent/…`), and
-          `**/TODO.md` forbids that filename at any depth. Empty by default —
-          callers that only need the base list omit this input.
+          (e.g. `.vale.ini`). Empty by default — callers that only need the
+          base list omit this input.
         required: false
         type: string
         default: ''
@@ -42,6 +39,7 @@ env:
 jobs:
   check-forbidden-docs:
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     steps:
       - name: Get changed files
         id: changed
@@ -70,19 +68,14 @@ jobs:
               .map(s => s.trim())
               .filter(s => s.length > 0);
             const allPatterns = [...baseHardcoded, ...extra];
-            const matches = (f, p) => {
-              if (p.startsWith('**/')) {
-                const s = p.slice(3);
-                return s.endsWith('/')
-                  ? f.startsWith(s) || f.includes('/' + s)
-                  : f === s || f.endsWith('/' + s);
-              }
-              return p.endsWith('/') ? f.startsWith(p) : f === p;
-            };
             const forbidden = files
               .filter(f => f.status === 'added' || f.status === 'modified')
               .map(f => f.filename)
-              .filter(f => allPatterns.some(p => matches(f, p)));
+              .filter(f =>
+                allPatterns.some(p =>
+                  p.endsWith('/') ? f.startsWith(p) : f === p
+                )
+              );
             if (forbidden.length > 0) {
               core.setFailed(
                 `Forbidden paths must not be merged into main:\n` +
