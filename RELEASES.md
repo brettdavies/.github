@@ -45,11 +45,10 @@ gh pr create --base main --title "feat(scope): what changed"
 Every PR (feature, fix, docs, release) uses `.github/pull_request_template.md` verbatim.
 
 - **No explainer prose anywhere in the body.** User-facing substance only.
-- **Summary describes the net diff only** — what merged `main` looks like vs the base branch. Not commit history,
-  or intermediate state.
-- **Zero verification artifacts in the body.** No leak-check output ("`guard-main-docs` runs clean"),
-  pre-push gate results, CI status, or prose-scrub findings. Anomalies get fixed before
-  push, not audit-trailed.
+- **Summary describes the net diff only** — what merged `main` looks like vs the base branch. Not commit history, or
+  intermediate state.
+- **Zero verification artifacts in the body.** No leak-check output ("`guard-main-docs` runs clean"), pre-push gate
+  results, CI status, or prose-scrub findings. Anomalies get fixed before push, not audit-trailed.
 - **Changelog** subsections (`### Added` / `### Changed` / `### Fixed` / `### Documentation`): 1-5 bullets each, delete
   empty subsections, each bullet starts with a verb.
 - A PR with no user-facing impact (pure refactor, test-only, CI-only) leaves `## Changelog` empty or omits it.
@@ -108,7 +107,7 @@ checks, then paste the cleaned text back into the YAML file.
 | Self-applied workflow      | Calls reusable                            | Why local-path reference                                                                                                                                                  |
 | -------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `self-guard-main-docs.yml` | `./.github/workflows/guard-main-docs.yml` | Filename differs from the reusable to avoid a self-collision; uses `./...` so the caller exercises the PR's version, catching regressions on the PR that introduces them. |
-| `lint.yml`                 | `./.github/workflows/lint-basics.yml`     | Repo-internal PR gate; the local path exercises the PR head version of the reusable.                                                                                          |
+| `lint.yml`                 | `./.github/workflows/lint-basics.yml`     | Repo-internal PR gate; the local path exercises the PR head's version of the reusable.                                                                                    |
 
 When adding a new reusable workflow, also add a thin self-applied caller (different filename, `./...` path reference,
 job-key matching the standard convention so the status-check name is stable).
