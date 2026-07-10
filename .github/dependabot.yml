@@ -1,0 +1,15 @@
+# Weekly pin-freshness PRs for the workflows' actions. Trunk flow: PRs target
+# main directly.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    target-branch: main
+    labels:
+      - dependencies
+      - github-actions

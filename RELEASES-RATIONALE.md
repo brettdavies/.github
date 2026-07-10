@@ -1,7 +1,7 @@
 # Releases rationale
 
 Companion to [`RELEASES.md`](./RELEASES.md). `RELEASES.md` is the runbook (commands, paths, decision tables). This file
-holds the WHY behind those rules: branching model, release-PR conventions, triple-diff verification, prose-scrubbing
+holds the WHY behind those rules: branching model, PR conventions, prose-scrubbing
 scope, self-applied reusable workflows, branch protection, and ref-pinning policy.
 
 Read this when:
@@ -12,34 +12,29 @@ Read this when:
 
 ## Branching model
 
-### Forever `dev`, ephemeral release branches
+### Trunk-based: main is the only live branch
 
-`dev` is never deleted, even after a `release/* → main` merge. The next release cycle reuses the same `dev`. The repo's
-`deleteBranchOnMerge: true` setting doesn't touch `dev` as long as `dev` is never the head of a PR. Using a short-lived
-`release/*` head is what keeps the setting compatible with a forever integration branch. The `release/*` head pattern is
-a convention here; the `guard-release-branch.yml` reusable workflow that ships from this repo enforces it for any
-consumer that wires it up, but this repo does not currently self-apply it.
+Feature branches cut from `main` and merge back via squash PRs. Consumers pin `@main`, so `main` is production, and a
+merged PR is immediately live fleet-wide. A separate integration branch adds a promotion hop between "reviewed and
+merged" and "available to consumers"; for a repo whose entire product is the ref consumers resolve at run time, that
+hop is pure latency and a staleness foot-gun (fixes sit merged-but-unshipped while every consumer keeps running without
+them). The PR gate (lint, docs guard, review) provides the verification; the promotion ceremony provided none.
+
+`dev` is retired, not deleted: it archives the historical engineering docs (`docs/plans/` and friends) that never ship
+to `main`, pending review. Its ruleset stays applied so the archive cannot be deleted or rewritten. New planning docs
+live in the solutions repo or in local-only checkouts.
 
 Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
-`docs/reviews/`, `docs/solutions/`) live on `dev` only. The `self-guard-main-docs.yml` workflow (this repo's
-self-applied caller of its own `guard-main-docs.yml` reusable) blocks them from reaching `main`. The other guard
-reusables shipped from this repo (`guard-main-provenance.yml`, `guard-release-branch.yml`) are not currently
-self-applied here; consumers wire them up themselves.
-
-### Why branch from `main`, not `dev`
-
-Branching from `dev` and then deleting the guarded paths seems simpler but produces `add/add` merge conflicts whenever
-`dev` and `main` have diverged (which they always do after the first squash merge). The file appears as "added" on both
-sides with different content. Always branch from `origin/main` and cherry-pick onto it.
+`docs/reviews/`, `docs/solutions/`) stay off `main`. The `self-guard-main-docs.yml` workflow (this repo's self-applied
+caller of its own `guard-main-docs.yml` reusable) blocks them from reaching `main`. The other guard reusables shipped
+from this repo (`guard-main-provenance.yml`, `guard-release-branch.yml`) are not self-applied here; consumers wire them
+up themselves.
 
 ### No CHANGELOG, no version bump, no tag
 
 Unlike the Rust CLI sibling repos, this repo has no `Cargo.toml`, no `CHANGELOG.md`, and no tag-driven release pipeline.
 Steps you'd run in those repos (`cargo update`, `generate-completions.sh`, `generate-changelog.sh`, `git tag -a`) are
-all no-ops here. The release PR is just the cherry-picked commits; merging it is the release.
-
-This is why the `release/*` slug is just a descriptive name (e.g., `release/guard-release-branch`,
-`release/shellcheck-and-prose-scrub`) and not `release/v<X.Y.Z>`. There's no version to encode.
+all no-ops here. Merging a feature PR to `main` is the release.
 
 If a future change introduces a versioned ref (e.g., migrating consumers from `@main` to `@v1` per the trigger
 documented in [`README.md`](README.md#ref-pinning)), reintroduce the tag step and revisit the runbook.
@@ -49,59 +44,20 @@ documented in [`README.md`](README.md#ref-pinning)), reintroduce the tag step an
 ### No explainer prose in the body
 
 Every section of a PR body is user-facing substance only: what is changing for the consumer that was not already there —
-the **net diff**, not the commit history or intermediate state that produced it. Workflow mechanics (cherry-pick,
-triple-diff verification, CI behavior) are documented in this file, in `RELEASES.md`, and in `.github/`, NOT in the PR
-body. Triple-diff output ("A: 12 files, B: none, C: clean"), leak-check narration ("`guard-main-docs` runs clean", "no
-guarded paths leaked"), patch-id cherry-check counts, CI check status, exclusion rationale, and other verification
-artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
+the **net diff**, not the commit history or intermediate state that produced it. Workflow mechanics and CI behavior
+are documented in this file, in `RELEASES.md`, and in `.github/`, NOT in the PR body. Leak-check narration
+("`guard-main-docs` runs clean", "no guarded paths leaked"), CI check status, exclusion rationale, and other
+verification artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
 
 The PR body is read by humans reviewing what shipped. Workflow mechanics and tool-fix provenance are noise from that
 perspective; they belong in this file, the script outputs, and the commit history respectively.
 
-### Squash-merge title prefix on `release/* → main` PRs
-
-This repo uses `release: <description>` as the squash-merge title for `release/* → main` PRs. `release:` is not a
-Conventional Commits type, but it's the established convention here. It visually distinguishes the dev-to-main
-consolidations from the underlying `feat`/`fix`/`ci`/`docs` PRs that fed `dev`. Keep using it.
-
-## Triple-diff verification
-
-The release-PR procedure runs three diffs (A: main → release, B: release → dev for non-doc paths, C: dev → main) plus a
-patch-id cherry check. This is belt-and-suspenders because missed cherry-picks are a real failure mode in squash-merge
-workflows, and the file-level diff in B alone doesn't catch the patch-id false-negative class.
-
-### Why patch-id cherry-check output is noisy
-
-In a squash-merge workflow, `git cherry HEAD origin/dev` produces many `+` lines that need human triage. They do NOT
-auto-block the release. Expected sources of false positives:
-
-1. **Historical commits squash-merged in prior releases.** The squash commit on `main` has a different patch-id than the
-   dev commits it consolidates, so old commits show as `+` forever. Anything older than the previous release is almost
-   always this.
-2. **Cherry-picks where conflict resolution stripped guarded paths** (`docs/plans/`, `docs/brainstorms/`, etc.) or
-   otherwise altered the tree. Same source-code intent, different patch-id.
-3. **Intentionally skipped commits** (docs-only commits on `docs/plans/`, release-prep backports, revert-and-redo prep
-   steps).
-
-A real miss looks like: a recent feat/fix/ci commit on `dev` whose *file content* is not yet on `main`. To triage a `+`
-line:
-
-```bash
-git show <sha> --stat                       # what did it touch?
-git diff origin/main..HEAD -- <those-files> # already on release?
-```
-
-If every touched file is guarded (`docs/plans/`, `docs/brainstorms/`, etc.) OR the content is already on `main` via a
-prior squash, it's a false positive (no action). Otherwise cherry-pick the commit and re-run the triple-diff.
-
 ## Prose scrubbing scope
 
-Three release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
+Two release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
 
-- **PR bodies on feature → dev PRs.** `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check
+- **PR bodies on PRs to `main`.** `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check
   sees it.
-- **Release-PR bodies on `release/* → main` PRs.** Same out-of-repo gap. These bodies are usually written after the
-  cherry-picks land and tend to be the longest, most-read prose this repo produces.
 - **Workflow `description:` strings, comments, and any inline prose inside `.github/workflows/*.yml`.** YAML files are
   not covered by the same markdown-targeted prose checks, but the strings users see in the GitHub Actions UI come from
   here.
