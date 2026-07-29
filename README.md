@@ -1,6 +1,6 @@
 # brettdavies/.github
 
-Reusable GitHub Actions workflows for all brettdavies Rust CLI tools.
+Reusable GitHub Actions workflows and composite actions for brettdavies repositories.
 
 ## Why
 
@@ -9,10 +9,14 @@ repos.
 
 ## Directory structure
 
-GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is* named `.github`, the on-disk path is:
+GitHub requires reusable workflows in `.github/workflows/`; composite actions live at the repo-root `actions/`
+directory. Since this repo *is* named `.github`, the on-disk paths are:
 
 ```text
 .github/                    # repo root
+  actions/
+    reconcile-lockfile/     # composite action: Dependabot lockfile sync
+      action.yml
   .github/                  # GitHub's special directory
     workflows/
       rust-ci.yml           # reusable CI workflow
@@ -182,6 +186,53 @@ permissions:
 jobs:
   guard-release:
     uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
+```
+
+## Composite actions
+
+Composite actions run as steps inside a caller's job (after the caller's own checkout and toolchain setup), so they suit
+ecosystem-agnostic logic the caller wraps with repo-specific setup.
+
+### `reconcile-lockfile`
+
+Regenerates a lockfile (or any derived, must-be-rebuilt artifact) after a Dependabot bump and commits it back to the PR
+branch. Dependabot updates a manifest but does not always reconcile the lockfile — Bun is the clear case: it leaves
+`bun.lock` stale, so the next `bun install --frozen-lockfile` fails on every Dependabot PR. Full docs and the security
+model (write-capable PAT stored as a **Dependabot** secret, since Dependabot runs cannot see Actions secrets) live in
+[`actions/reconcile-lockfile/README.md`](actions/reconcile-lockfile/README.md).
+
+|                                 |                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| **Inputs**                      | `command` (required), `files` (required), `commit-message` (optional)                  |
+| **Required caller permissions** | `contents: read` (the PAT does the write, checked out via `actions/checkout` `token:`) |
+| **Runs when**                   | Caller guards the job with `if: github.actor == 'dependabot[bot]'`                     |
+
+**Caller example (Bun):**
+
+```yaml
+name: Dependabot lockfile sync
+on:
+  pull_request:
+    branches: [dev, main]
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@<sha> # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.DEPENDABOT_RECONCILE_TOKEN }}
+      - uses: oven-sh/setup-bun@<sha> # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - uses: brettdavies/.github/actions/reconcile-lockfile@main
+        with:
+          command: bun install --ignore-scripts
+          files: bun.lock
 ```
 
 ## Ruleset templates

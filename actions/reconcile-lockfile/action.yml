@@ -1,0 +1,51 @@
+name: Reconcile lockfile
+description: >-
+  Regenerate a lockfile or other derived artifact after a Dependabot dependency
+  bump and commit it back to the pull request branch, so the next frozen install
+  (CI, local hooks) sees a lockfile that matches the bumped manifest. The calling
+  job owns checkout (with a write-capable token) and toolchain setup; this action
+  runs the reconcile command and pushes only when the tracked files change.
+
+inputs:
+  command:
+    description: >-
+      Command that regenerates the derived artifact(s), for example
+      "bun install --ignore-scripts" or "cargo update --package <crate>".
+    required: true
+  files:
+    description: >-
+      Space-separated paths to stage and commit when they change, for example
+      "bun.lock". A run that leaves these unchanged pushes nothing.
+    required: true
+  commit-message:
+    description: Message for the reconcile commit.
+    required: false
+    default: "chore(deps): reconcile lockfile after dependency bump"
+
+runs:
+  using: composite
+  steps:
+    - name: Regenerate derived artifacts
+      shell: bash
+      env:
+        RECONCILE_CMD: ${{ inputs.command }}
+      run: bash -c "$RECONCILE_CMD"
+
+    - name: Commit and push when changed
+      shell: bash
+      env:
+        FILES: ${{ inputs.files }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      run: |
+        # shellcheck disable=SC2086
+        if [ -z "$(git status --porcelain -- $FILES)" ]; then
+          echo "No changes to $FILES; the lockfile already matches the manifest."
+          exit 0
+        fi
+        git config user.name 'github-actions[bot]'
+        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        # shellcheck disable=SC2086
+        git add $FILES
+        git commit -m "$COMMIT_MESSAGE"
+        git push
+        echo "Reconciled $FILES and pushed to the pull request branch."
