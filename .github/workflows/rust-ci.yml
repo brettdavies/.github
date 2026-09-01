@@ -11,6 +11,12 @@ name: Rust CI
 
 on:
   workflow_call:
+    inputs:
+      advisories_blocking:
+        description: "Fail the run when `cargo deny check advisories` reports a finding. Default false: the advisories row soft-fails so a newly published advisory against an unrelated dependency cannot block every consumer's merges. Set true once the consumer repo is willing to treat an advisory as a stop condition."
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -69,7 +75,14 @@ jobs:
     strategy:
       matrix:
         checks: [advisories, "bans licenses sources"]
-    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    # The advisories row soft-fails by default because its input is the
+    # RustSec database, not the repo: an advisory published overnight against a
+    # transitive dependency would otherwise turn every consumer's CI red with no
+    # change on their side. The job's own conclusion is still `failure`, so a
+    # consumer can require the check in its ruleset to gate merges without
+    # opting into a red run. `advisories_blocking: true` additionally fails the
+    # run itself.
+    continue-on-error: ${{ matrix.checks == 'advisories' && !inputs.advisories_blocking }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
