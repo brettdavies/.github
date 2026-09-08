@@ -21,6 +21,12 @@
 # catch the common mistake (opening a PR from feat/* or dev directly to main)
 # before it produces noise in main's history, and to keep dev off-limits as
 # a PR head so `deleteBranchOnMerge` can never delete it.
+#
+# Dependabot security updates are exempt. Dependabot raises them against the
+# default branch from a `dependabot/` head and cannot be retargeted, so a
+# guard that rejects them leaves every advisory unfixable on main. The
+# exemption requires both the `dependabot[bot]` actor and the `dependabot/`
+# head prefix; a human branch named `dependabot/...` still fails.
 
 name: Guard release branch pattern
 
@@ -48,7 +54,12 @@ jobs:
         env:
           HEAD_REF: ${{ github.head_ref }}
           PREFIX: ${{ inputs.prefix }}
+          ACTOR: ${{ github.actor }}
         run: |
+          if [[ "$ACTOR" == "dependabot[bot]" && "$HEAD_REF" == dependabot/* ]]; then
+            echo "Head branch '$HEAD_REF' is a Dependabot security update, exempt from '$PREFIX*'. OK."
+            exit 0
+          fi
           if [[ "$HEAD_REF" != "$PREFIX"* ]]; then
             echo "::error title=Wrong head branch::PRs to main must come from a '$PREFIX*' branch."
             echo ""
@@ -57,8 +68,8 @@ jobs:
             echo "The correct workflow is:"
             echo "  1. Open your PR to dev instead (feature → dev)."
             echo "  2. When dev is ready to ship, cut a '${PREFIX}<slug>' branch"
-            echo "     from origin/main and cherry-pick the commits you want to"
-            echo "     release (see RELEASES.md / RELEASING.md)."
+            echo "     from origin/main and overlay dev's tree onto it"
+            echo "     (see RELEASES.md § Releasing dev to main)."
             echo "  3. Open the '${PREFIX}<slug>' → main PR."
             echo ""
             echo "If this PR legitimately should bypass the pattern (e.g. an"
