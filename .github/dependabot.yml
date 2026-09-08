@@ -1,5 +1,13 @@
 # Weekly pin-freshness PRs for the workflows' actions. Trunk flow: PRs target
-# main directly.
+# main, which is the default branch, so no `target-branch` is set. Setting one,
+# even to main, detaches the block from security updates, which Dependabot
+# raises against the default branch using only blocks without `target-branch`.
+#
+# Minor and patch bumps batch into one PR per week; majors open individually
+# because this repo is the fleet's source of reusable workflows and an action
+# major deserves its own review. Security fixes batch per run. The 7-day
+# cooldown keeps a just-published action version out of the fleet until it
+# has survived a week.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -9,7 +17,18 @@ updates:
       day: monday
       time: "09:00"
       timezone: America/Chicago
-    target-branch: main
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - github-actions
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
