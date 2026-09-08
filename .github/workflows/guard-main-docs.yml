@@ -11,7 +11,14 @@
 #     guard-docs:
 #       uses: brettdavies/.github/.github/workflows/guard-main-docs.yml@main
 #       with:
-#         extra_paths: 'styles/,.vale.ini,scripts/prose-check.sh'
+#         extra_paths: 'styles/,.vale.ini,scripts/prose-check.sh,**/.agent/,**/TODO*.md'
+#
+# Entries are globs matched against the full repo path: `*` and `?` stay
+# within one path segment, `**/` spans any number of directories, and a
+# trailing `/` guards the directory and everything under it. An entry with no
+# glob characters keeps its old meaning: prefix match with a trailing slash,
+# exact path without one. The same rules are mirrored by the consumer-side
+# scripts/release/guarded-paths.sh vendored from the github-repo-setup skill.
 #
 # Required caller permissions: pull-requests: read
 name: Guard main from engineering docs
@@ -22,10 +29,16 @@ on:
       extra_paths:
         description: |
           Comma-separated list of additional paths to forbid alongside the
-          hardcoded engineering-docs base list. Entries ending with `/` match
-          by prefix (e.g. `styles/`); other entries match by exact filename
-          (e.g. `.vale.ini`). Empty by default — callers that only need the
-          base list omit this input.
+          hardcoded engineering-docs base list. Each entry is a glob against
+          the full repo path: `*` and `?` match within one segment, `**/`
+          matches any number of directories, and a trailing `/` guards the
+          directory and everything under it. Without glob characters an
+          entry ending in `/` matches by prefix (e.g. `styles/`) and any
+          other entry matches the exact path (e.g. `.vale.ini`). Examples:
+          `**/.agent/` (that directory at any depth), `**/TODO*.md` (that
+          filename shape at any depth), `docs/*.md` (top-level docs only).
+          Empty by default — callers that only need the base list omit this
+          input.
         required: false
         type: string
         default: ''
@@ -68,14 +81,34 @@ jobs:
               .map(s => s.trim())
               .filter(s => s.length > 0);
             const allPatterns = [...baseHardcoded, ...extra];
+            // Glob to anchored RegExp. `*` and `?` stay inside one segment,
+            // `**/` spans directories, `**` elsewhere matches anything. A
+            // trailing `/` leaves the end unanchored so the directory's
+            // contents match; anything else must match the whole path.
+            const globToRegExp = (p) => {
+              let re = '';
+              for (let i = 0; i < p.length; i++) {
+                const c = p[i];
+                if (c === '*') {
+                  if (p[i + 1] === '*') {
+                    i++;
+                    if (p[i + 1] === '/') { i++; re += '(?:.*/)?'; } else { re += '.*'; }
+                  } else {
+                    re += '[^/]*';
+                  }
+                } else if (c === '?') {
+                  re += '[^/]';
+                } else {
+                  re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+                }
+              }
+              return new RegExp('^' + re + (p.endsWith('/') ? '' : '$'));
+            };
+            const matchers = allPatterns.map(globToRegExp);
             const forbidden = files
               .filter(f => f.status === 'added' || f.status === 'modified')
               .map(f => f.filename)
-              .filter(f =>
-                allPatterns.some(p =>
-                  p.endsWith('/') ? f.startsWith(p) : f === p
-                )
-              );
+              .filter(f => matchers.some(m => m.test(f)));
             if (forbidden.length > 0) {
               core.setFailed(
                 `Forbidden paths must not be merged into main:\n` +
