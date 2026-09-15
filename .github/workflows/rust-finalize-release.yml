@@ -22,6 +22,14 @@ name: Rust Finalize Release
 on:
   workflow_call:
 
+# Serializes rather than cancels: this flips a published release's state,
+# and a run killed part way leaves it half-finalized. Keyed on the calling
+# repository, matching rust-release.yml, so one repo's finalize waits for
+# its predecessor instead of racing it.
+concurrency:
+  group: finalize-release-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
