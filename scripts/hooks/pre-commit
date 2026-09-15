@@ -16,6 +16,7 @@ if echo "$staged" | grep -qE '^\.github/workflows/.*\.ya?ml$'; then
   else
     echo "pre-commit: actionlint not installed; skipping workflow lint"
   fi
+  bash scripts/check-workflow-concurrency.sh
 fi
 
 if echo "$staged" | grep -qE '\.md$'; then
