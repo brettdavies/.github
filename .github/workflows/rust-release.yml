@@ -49,8 +49,12 @@ on:
         description: "Fine-grained PAT with contents:write for release automation (Homebrew dispatch, changelog, rulesets)"
         required: true
 
+# The key leads with this file's own token. `release-` alone is a key a caller's
+# own release workflow produces for itself, and two declarations that resolve to
+# one string are one group. Never cancels: a run killed part way leaves a
+# half-published release.
 concurrency:
-  group: release-${{ github.repository }}
+  group: rust-release-${{ github.repository }}
   cancel-in-progress: false
 
 env:

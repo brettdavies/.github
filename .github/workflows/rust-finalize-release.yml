@@ -25,9 +25,10 @@ on:
 # Serializes rather than cancels: this flips a published release's state,
 # and a run killed part way leaves it half-finalized. Keyed on the calling
 # repository, matching rust-release.yml, so one repo's finalize waits for
-# its predecessor instead of racing it.
+# its predecessor instead of racing it. The key leads with this file's own
+# token, which a caller's own workflow cannot produce by accident.
 concurrency:
-  group: finalize-release-${{ github.repository }}
+  group: rust-finalize-release-${{ github.repository }}
   cancel-in-progress: false
 
 env:
