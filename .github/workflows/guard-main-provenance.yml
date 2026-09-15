@@ -5,9 +5,16 @@
 # Skipped for release/* branches — cherry-picks from dev inherently lose PR
 # references, and the release PR itself is the review gate.
 #
-# Exempt prefixes: docs:, chore:, ci:, style:, build: (housekeeping commits
-# authored directly on the release branch: version bumps, changelogs, CI tweaks).
-# test: is NOT exempt — tests are code and must go through PRs.
+# Housekeeping commits authored directly against main are exempt, and they
+# arrive in two shapes. A housekeeping TYPE: docs:, chore:, ci:, style:,
+# build:. Or a product type carrying a housekeeping SCOPE: fix(ci):,
+# feat(hooks):, fix(release):. The fleet standard prefers feat/fix over chore
+# for anything a user can observe, and cliff.toml drops chore/ci/build/style
+# /test from changelogs, so internal CI, hook and release-tooling work is
+# written as fix(ci) and fix(hooks) by design. Matching the type alone read
+# those as product code and demanded a PR reference they can never carry.
+#
+# test: is NOT exempt in either shape — tests are code and must go through PRs.
 #
 # Caller example:
 #   jobs:
@@ -58,19 +65,26 @@ jobs:
               per_page: 100,
             });
 
-            const exempt = /^(docs|chore|ci|style|build)(\(.+\))?:/i;
+            // A housekeeping type, in any scope.
+            const exemptType = /^(docs|chore|ci|style|build)(\(.+\))?!?:/i;
+            // A housekeeping scope, under any type except `test`. A test is
+            // code wherever it is scoped, so `test(ci):` stays unexempt and
+            // the lookahead is what keeps the scope branch from readmitting
+            // the one type the type branch deliberately excludes.
+            const exemptScope = /^(?!test\()[a-z]+\((ci|hooks|workflows|build|release|style|docs)\)!?:/i;
             const prRef = /\(#\d+\)/;
 
             const violations = commits
               .map(c => c.commit.message.split('\n')[0])
-              .filter(msg => !exempt.test(msg) && !prRef.test(msg));
+              .filter(msg => !exemptType.test(msg) && !exemptScope.test(msg) && !prRef.test(msg));
 
             if (violations.length > 0) {
               core.setFailed(
                 `Commits must come from PRs to dev (squash commits include (#N) references).\n` +
                 `The following commits have no PR reference and are not exempt:\n` +
                 violations.map(m => `  - ${m}`).join('\n') + '\n\n' +
-                `Exempt prefixes: docs:, chore:, ci:, style:, build:\n` +
+                `Exempt types: docs:, chore:, ci:, style:, build:\n` +
+                `Exempt scopes, under any type: (ci), (hooks), (workflows), (build), (release), (style), (docs)\n` +
                 `Fix: use feature PRs to dev instead of committing directly to the release branch.`
               );
             } else {
