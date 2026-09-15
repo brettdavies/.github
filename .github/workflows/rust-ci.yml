@@ -7,6 +7,12 @@
 #       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
 #
 # Required caller permissions: contents: read, pull-requests: read
+#
+# A caller that declares its own `concurrency:` block covers only the jobs it
+# defines itself; this workflow's jobs are covered by the group below. Key the
+# caller's group on its own literal token (`ci-${{ github.ref }}`), never on
+# `${{ github.workflow }}` alone: see the note on that block for what happens
+# when the two keys match.
 name: Rust CI
 
 on:
@@ -18,8 +24,16 @@ on:
         required: false
         default: false
 
+# The literal `rust-ci-` prefix is what keeps this group distinct from a
+# caller's own. Inside a called workflow `github.workflow` is the *caller's*
+# workflow name, so a key built only from context is a key the caller also
+# produces: both land in one group, and because this block cancels in progress,
+# this workflow's queue cancels the run that called it. That presents as a run
+# concluding failure with every visible job green and this workflow's jobs
+# absent, with nothing in the logs naming a cause. The caller and ref parts stay
+# so two consumers, and two branches of one consumer, still separate.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

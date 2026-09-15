@@ -14,6 +14,8 @@ else
   echo "pre-push: actionlint not installed; skipping workflow lint"
 fi
 
+bash scripts/check-workflow-concurrency.sh
+
 if command -v markdownlint-cli2 >/dev/null 2>&1; then
   markdownlint-cli2 "**/*.md"
 else
