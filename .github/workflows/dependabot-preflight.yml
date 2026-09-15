@@ -43,6 +43,15 @@ on:
         type: boolean
         default: true
 
+# A literal token leads the group key. Inside a called workflow
+# `github.workflow` resolves to the *caller's* workflow name, so a key built
+# only from context is one a caller also produces for its own group; both then
+# land in one group and this workflow's queue cancels the run that called it.
+# The caller and ref parts stay so callers, and refs within a caller, separate.
+concurrency:
+  group: dependabot-preflight-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
