@@ -116,11 +116,15 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # `--workspace` packages every member together and verifies them against
+      # each other, which is the only way to dry-run a member whose path
+      # dependency is not on crates.io yet. On a single root package it is the
+      # same command as before.
       - name: List package contents
-        run: cargo package --list
+        run: cargo package --list --workspace
 
       - name: Dry-run publish
-        run: cargo publish --dry-run
+        run: cargo publish --dry-run --workspace
 
   shellcheck:
     name: Shellcheck
@@ -155,9 +159,10 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     steps:
-      - name: Check CHANGELOG.md was updated
+      - name: Check the changelog beside each bumped crate was updated
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -168,20 +173,56 @@ jobs:
               per_page: 100,
             });
             const changed = files.map(f => f.filename);
+            const head = context.payload.pull_request.head.sha;
 
-            // Skip changelog check for non-release PRs (no Cargo.toml version bump).
-            // Release PRs always bump the version, so this is a reliable signal.
-            if (!changed.includes('Cargo.toml')) {
-              core.info('Cargo.toml not changed — not a release PR. Skipping changelog check.');
+            // A file's text at the PR head, or null when it does not exist there.
+            async function contentAtHead(path) {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path,
+                  ref: head,
+                });
+                return Buffer.from(data.content, data.encoding).toString('utf8');
+              } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+            }
+
+            // Release PRs always bump a package version, so a changed package
+            // manifest is the signal. A workspace's virtual root manifest has no
+            // `[package]` table and is not a release on its own.
+            const manifests = changed.filter(f => f === 'Cargo.toml' || f.endsWith('/Cargo.toml'));
+            const bumped = [];
+            for (const manifest of manifests) {
+              const text = await contentAtHead(manifest);
+              if (text !== null && /^\[package\]\s*$/m.test(text)) bumped.push(manifest);
+            }
+            if (bumped.length === 0) {
+              core.info('No package Cargo.toml changed — not a release PR. Skipping changelog check.');
               return;
             }
 
-            if (!changed.includes('CHANGELOG.md')) {
+            // The changelog beside the crate governs it; a member that keeps
+            // none of its own (a workspace's binary that owns the root
+            // CHANGELOG.md) is governed by the root one.
+            const missing = [];
+            for (const manifest of bumped) {
+              const dir = manifest.slice(0, manifest.length - 'Cargo.toml'.length);
+              const beside = `${dir}CHANGELOG.md`;
+              const changelog = dir === '' || (await contentAtHead(beside)) !== null ? beside : 'CHANGELOG.md';
+              if (changed.includes(changelog)) {
+                core.info(`${changelog} updated for ${manifest}. OK.`);
+              } else {
+                missing.push(`${changelog} (for ${manifest})`);
+              }
+            }
+            if (missing.length > 0) {
               core.setFailed(
-                'CHANGELOG.md was not updated in this PR.\n' +
+                `Not updated in this PR: ${missing.join(', ')}.\n` +
                 'Run: ~/.claude/skills/rust-tool-release/scripts/generate-changelog.sh\n' +
                 'Then commit the result.'
               );
-            } else {
-              core.info('CHANGELOG.md updated. OK.');
             }

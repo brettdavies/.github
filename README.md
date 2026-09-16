@@ -20,7 +20,8 @@ directory. Since this repo *is* named `.github`, the on-disk paths are:
   .github/                  # GitHub's special directory
     workflows/
       rust-ci.yml           # reusable CI workflow
-      rust-release.yml      # reusable release workflow
+      rust-release.yml      # reusable release workflow (binary crate)
+      rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
       lint.yml              # internal: actionlint on push/PR
 ```
@@ -58,12 +59,12 @@ Full release pipeline: version check, audit, cross-platform build (7 targets —
 soft-fail by default), crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes extracted from
 CHANGELOG.md), Homebrew dispatch.
 
-|                                 |                                                                                                                                                                             |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                                                                                             |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                     |
-| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                        |
+|                                 |                                                                                                                                                                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                         |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `artifact_name` (string, optional, default the crate name) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                 |
+| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                                                                                    |
 
 **Caller example:**
 
@@ -83,6 +84,36 @@ jobs:
       bin: bird
     secrets:
       CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
+```
+
+### `rust-lib-release.yml`
+
+Release pipeline for a library crate in a workspace: version check against the crate's own `Cargo.toml`, audit, `cargo
+publish -p <crate>` (Trusted Publishing OIDC), GitHub Release (notes extracted from the changelog beside the crate,
+`make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
+
+|                                 |                                                                                                                                                                              |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                              |
+| **Inputs**                      | `crate` (string, required), `tag_prefix` (string, optional, default `<crate>-v`), `changelog` (string, optional, default the `CHANGELOG.md` beside the crate's `Cargo.toml`) |
+| **Secrets**                     | None (crates.io Trusted Publishing and `GITHUB_TOKEN`, which flow automatically)                                                                                             |
+| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                         |
+
+**Caller example:**
+
+```yaml
+name: Release library
+on:
+  push:
+    tags: ['xdk-rs-v[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  pipeline:
+    uses: brettdavies/.github/.github/workflows/rust-lib-release.yml@main
+    with:
+      crate: xdk-rs
 ```
 
 ### `rust-finalize-release.yml`

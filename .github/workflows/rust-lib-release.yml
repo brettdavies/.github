@@ -1,0 +1,211 @@
+# Reusable release workflow for a brettdavies Rust library crate. Publishes
+# one package to crates.io and creates a GitHub Release from that crate's
+# changelog. No binaries, no Homebrew.
+#
+# Caller example:
+#   on:
+#     push:
+#       tags:
+#         - 'xdk-rs-v[0-9]+.[0-9]+.[0-9]+'
+#   jobs:
+#     pipeline:
+#       uses: brettdavies/.github/.github/workflows/rust-lib-release.yml@main
+#       with:
+#         crate: xdk-rs
+#
+# The tag is `<tag_prefix><version>`; the prefix defaults to `<crate>-v`, so a
+# library tag never collides with the binary's bare `v<version>` line in the
+# same repository. The changelog defaults to the `CHANGELOG.md` beside the
+# crate's own `Cargo.toml`, which is where a workspace member keeps it.
+#
+# Required caller permissions: contents: write, id-token: write
+name: Rust Library Release
+
+on:
+  workflow_call:
+    inputs:
+      crate:
+        description: "Package name to publish (e.g., xdk-rs). Must be a member of the workspace at the tagged commit."
+        type: string
+        required: true
+      tag_prefix:
+        description: "What precedes the version in the tag. Empty means `<crate>-v`."
+        type: string
+        required: false
+        default: ""
+      changelog:
+        description: "Path to the changelog the release notes are cut from, relative to the repository root. Empty means the `CHANGELOG.md` beside the crate's `Cargo.toml`."
+        type: string
+        required: false
+        default: ""
+
+# One release of one crate at a time per repository, and never cancelled: a
+# run killed between `cargo publish` and the GitHub Release leaves a version on
+# crates.io with no release behind it.
+concurrency:
+  group: rust-lib-release-${{ github.repository }}-${{ inputs.crate }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate crate name and tag prefix
+        env:
+          CRATE: ${{ inputs.crate }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          if [[ ! "$CRATE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error::Invalid crate name: $CRATE"
+            exit 1
+          fi
+          if [[ -n "$TAG_PREFIX" && ! "$TAG_PREFIX" =~ ^[a-zA-Z0-9_./-]+$ ]]; then
+            echo "::error::Invalid tag prefix: $TAG_PREFIX"
+            exit 1
+          fi
+
+  check-version:
+    needs: validate-inputs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify tag matches the crate's Cargo.toml version
+        env:
+          CRATE: ${{ inputs.crate }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          PREFIX="${TAG_PREFIX:-${CRATE}-v}"
+          if [[ "$GITHUB_REF_NAME" != "$PREFIX"* ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not start with ${PREFIX}"
+            exit 1
+          fi
+          TAG_VERSION="${GITHUB_REF_NAME#"$PREFIX"}"
+          # cargo pkgid output varies: `path+file:///path#0.1.1` on some
+          # setups, `name@0.1.1` on others (cargo picks the shortest
+          # unambiguous form). Strip through the last `#` OR `@` so both
+          # shapes collapse to the bare version.
+          CARGO_VERSION=$(cargo pkgid -p "$CRATE" | sed -E 's|.*[@#]||')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match ${CRATE} version ${CARGO_VERSION}"
+            exit 1
+          fi
+
+  audit:
+    needs: validate-inputs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        checks: [advisories, "bans licenses sources"]
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check ${{ matrix.checks }}
+
+  publish-crate:
+    needs: [check-version, audit]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Authenticate with crates.io
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish to crates.io
+        env:
+          CRATE: ${{ inputs.crate }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish -p "$CRATE"
+
+  release:
+    needs: publish-crate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Locate the crate's changelog
+        id: changelog-path
+        env:
+          CRATE: ${{ inputs.crate }}
+          CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          if [ -z "$CHANGELOG" ]; then
+            MANIFEST=$(cargo metadata --format-version 1 --no-deps \
+              | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .manifest_path')
+            if [ -z "$MANIFEST" ]; then
+              echo "::error::${CRATE} is not a workspace member at this commit"
+              exit 1
+            fi
+            CHANGELOG="$(dirname "$MANIFEST")/CHANGELOG.md"
+            CHANGELOG="${CHANGELOG#"$PWD"/}"
+          fi
+          if [ ! -f "$CHANGELOG" ]; then
+            echo "::error::No changelog at ${CHANGELOG}"
+            exit 1
+          fi
+          echo "path=${CHANGELOG}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from the changelog
+        id: changelog
+        env:
+          CRATE: ${{ inputs.crate }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+          CHANGELOG: ${{ steps.changelog-path.outputs.path }}
+        run: |
+          PREFIX="${TAG_PREFIX:-${CRATE}-v}"
+          VERSION="${GITHUB_REF_NAME#"$PREFIX"}"
+          # Anchor on the section whose '## ' heading contains the tag's version,
+          # not blindly the first section: a tag cut before its changelog entry
+          # landed, or an '## [Unreleased]' block at the top, would otherwise
+          # ship the wrong section silently. check-version has already verified
+          # the tag matches the crate version.
+          NOTES=$(awk -v ver="$VERSION" '/^## /{if(f)exit; if(index($0,ver))f=1} f' "$CHANGELOG")
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No ${CHANGELOG} section for ${GITHUB_REF_NAME}; falling back to generated notes"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "content<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # `make_latest: false` keeps the repository's "latest release" pointing at
+      # the binary's release, which is what a visitor downloading an archive
+      # expects to land on; the library's release is reached by its tag.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: ${{ inputs.crate }} ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.content }}
+          generate_release_notes: ${{ steps.changelog.outputs.generate == 'true' }}
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
