@@ -32,10 +32,11 @@ directory. Since this repo *is* named `.github`, the on-disk paths are:
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-|                                 |                                         |
-| ------------------------------- | --------------------------------------- |
-| **Trigger**                     | `workflow_call` (no inputs, no secrets) |
-| **Required caller permissions** | `contents: read`                        |
+|                                 |                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)                                                                                                       |
+| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job) |
+| **Required caller permissions** | `contents: read`                                                                                                                   |
 
 **Caller example:**
 
@@ -59,12 +60,12 @@ Full release pipeline: version check, audit, cross-platform build (7 targets —
 soft-fail by default), crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes extracted from
 CHANGELOG.md), Homebrew dispatch.
 
-|                                 |                                                                                                                                                                                                                                         |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                         |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `artifact_name` (string, optional, default the crate name) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                 |
-| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                                                                                    |
+|                                 |                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                     |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `artifact_name` (string, optional, default the crate name), `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                             |
+| **Required caller permissions** | `contents: write`, `id-token: write`                                                                                                                                                                                                                                                                                                |
 
 **Caller example:**
 
