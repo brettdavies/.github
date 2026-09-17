@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      windows_nasm:
+        description: "Install NASM on the Windows job before cargo runs. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image."
+        type: boolean
+        required: false
+        default: false
 
 # The literal `rust-ci-` prefix is what keeps this group distinct from a
 # caller's own. Inside a called workflow `github.workflow` is the *caller's*
@@ -78,6 +83,18 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # `cargo check` still runs build scripts, so a C library in the tree is
+      # compiled here. choco rather than a marketplace action: the shared
+      # workflow gains no new pinned dependency. The package installs under
+      # Program Files without touching the step's PATH, so the directory is
+      # appended explicitly.
+      - name: Install NASM
+        if: inputs.windows_nasm && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Check (Windows)
         run: cargo check --all-targets
