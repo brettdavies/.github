@@ -115,6 +115,34 @@ jobs:
             exit 1
           fi
 
+      # `cargo publish -p <crate>` resolves a path dependency from the registry,
+      # so a workspace member the crate depends on must already be published
+      # at a version its bound accepts. Without this check the failure lands
+      # in publish-crate, after every target has built, with a resolver
+      # message that names no cause. A scratch manifest asks cargo the exact
+      # question the publish will ask.
+      - name: Verify workspace dependencies are published at the declared bounds
+        env:
+          CRATE: ${{ inputs.crate }}
+        run: |
+          set -euo pipefail
+          missing=""
+          while IFS=$'\t' read -r name req; do
+            [ -n "$name" ] || continue
+            probe="$(mktemp -d)"
+            mkdir -p "$probe/src"
+            : > "$probe/src/lib.rs"
+            printf '[package]\nname = "bound-probe"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\n%s = "%s"\n' "$name" "$req" > "$probe/Cargo.toml"
+            if ! cargo generate-lockfile --manifest-path "$probe/Cargo.toml" --quiet 2>/dev/null; then
+              missing="${missing} ${name}@${req}"
+            fi
+          done < <(cargo metadata --format-version 1 --no-deps \
+            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .dependencies[] | select(.path != null and (.kind == null or .kind == "build")) | "\(.name)\t\(.req)"')
+          if [ -n "$missing" ]; then
+            echo "::error title=check-version::${CRATE} depends on workspace member(s) not on crates.io at the declared bound:${missing}; publish the library tag and wait for its run to go green before tagging ${CRATE}"
+            exit 1
+          fi
+
   audit:
     needs: validate-inputs
     runs-on: ubuntu-22.04
