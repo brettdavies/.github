@@ -45,6 +45,11 @@ on:
         type: boolean
         required: false
         default: false
+      changelog:
+        description: "Path to the changelog the release notes are cut from, relative to the repository root. Empty means the repository root's `CHANGELOG.md`; a workspace whose member keeps its own beside its manifest passes that path."
+        type: string
+        required: false
+        default: ""
       artifact_name:
         description: "Prefix of every archive and release asset (`<artifact_name>-<target>.tar.gz`). Empty means the crate name, which is what every existing download URL and binstall `pkg-url` carries; set it only when the published package is renamed and the download names must not follow."
         type: string
@@ -392,17 +397,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Extract release notes from CHANGELOG.md
+      - name: Extract release notes from the changelog
         id: changelog
+        env:
+          CHANGELOG_INPUT: ${{ inputs.changelog }}
         run: |
+          # A single-crate repository keeps its changelog at the root, which is
+          # the default. A workspace whose member keeps its own beside its
+          # manifest passes that path: the root holds no changelog to read, and
+          # the release would otherwise ship generated notes on a warning.
+          CHANGELOG="${CHANGELOG_INPUT:-CHANGELOG.md}"
+          if [ ! -f "$CHANGELOG" ]; then
+            echo "::error::No changelog at ${CHANGELOG}"
+            exit 1
+          fi
           # Anchor on the section whose '## ' heading contains the tag's version,
           # not blindly the first section: a tag cut before its changelog entry
           # landed, or an '## [Unreleased]' block at the top, would otherwise
           # ship the wrong section silently. check-version has already verified
           # the tag matches the crate version.
-          NOTES=$(awk -v ver="${GITHUB_REF_NAME#v}" '/^## /{if(f)exit; if(index($0,ver))f=1} f' CHANGELOG.md)
+          NOTES=$(awk -v ver="${GITHUB_REF_NAME#v}" '/^## /{if(f)exit; if(index($0,ver))f=1} f' "$CHANGELOG")
           if [ -z "$NOTES" ]; then
-            echo "::warning::No CHANGELOG.md section for ${GITHUB_REF_NAME}; falling back to generated notes"
+            echo "::warning::No ${CHANGELOG} section for ${GITHUB_REF_NAME}; falling back to generated notes"
             echo "generate=true" >> "$GITHUB_OUTPUT"
           fi
           {
