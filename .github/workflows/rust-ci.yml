@@ -183,7 +183,11 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
+            // Paginated: a release PR carrying a whole tree runs to hundreds of
+            // files, and a single page silently drops every crate past the first
+            // hundred. That failed open, reporting a release green whose
+            // changelog was never looked at.
+            const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number,
@@ -215,7 +219,14 @@ jobs:
             const bumped = [];
             for (const manifest of manifests) {
               const text = await contentAtHead(manifest);
-              if (text !== null && /^\[package\]\s*$/m.test(text)) bumped.push(manifest);
+              if (text === null || !/^\[package\]\s*$/m.test(text)) continue;
+              // A crate that is never published has no consumers to tell, so it
+              // keeps no changelog and must not be held to one.
+              if (/^\s*publish\s*=\s*false\s*(#.*)?$/m.test(text)) {
+                core.info(`${manifest} is publish = false. No changelog to keep.`);
+                continue;
+              }
+              bumped.push(manifest);
             }
             if (bumped.length === 0) {
               core.info('No package Cargo.toml changed — not a release PR. Skipping changelog check.');
