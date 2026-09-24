@@ -28,6 +28,11 @@ on:
         type: boolean
         required: false
         default: false
+      docs_only:
+        description: "Skip every job. Default false. A caller sets it once it has established that nothing in the change can reach cargo, such as a pull request that edits only documentation no Rust source reads. A job skipped by its condition reports success, which a ruleset counts as passing, so required checks stay satisfied. The audit matrix skips its steps rather than itself: a matrix job skipped whole never expands, and its cells' checks would wait forever under their expanded names."
+        type: boolean
+        required: false
+        default: false
 
 # The literal `rust-ci-` prefix is what keeps this group distinct from a
 # caller's own. Inside a called workflow `github.workflow` is the *caller's*
@@ -49,6 +54,7 @@ env:
 jobs:
   check:
     name: Fmt, clippy, test
+    if: ${{ !inputs.docs_only }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -73,6 +79,7 @@ jobs:
 
   check-windows:
     name: Windows check
+    if: ${{ !inputs.docs_only }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -116,12 +123,15 @@ jobs:
     continue-on-error: ${{ matrix.checks == 'advisories' && !inputs.advisories_blocking }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !inputs.docs_only }}
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        if: ${{ !inputs.docs_only }}
         with:
           command: check ${{ matrix.checks }}
 
   package-check:
     name: Package check
+    if: ${{ !inputs.docs_only }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -145,6 +155,7 @@ jobs:
 
   shellcheck:
     name: Shellcheck
+    if: ${{ !inputs.docs_only }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
