@@ -32,11 +32,11 @@ directory. Since this repo *is* named `.github`, the on-disk paths are:
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-|                                 |                                                                                                                                    |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)                                                                                                       |
-| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job) |
-| **Required caller permissions** | `contents: read`                                                                                                                   |
+|                                 |                                                                                                                                                                                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                          |
+| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                      |
 
 **Caller example:**
 
