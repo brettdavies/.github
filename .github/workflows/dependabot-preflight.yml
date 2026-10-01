@@ -169,20 +169,43 @@ jobs:
               fi
               processed+=("$key")
 
-              # Resolve latest release tag for the action's repo
-              latest="$(gh api "repos/$repo/releases/latest" \
-                --jq '.tag_name' 2>/dev/null || true)"
-              if [ -z "$latest" ]; then
-                latest="$(gh api "repos/$repo/tags" --jq '.[0].name' \
-                  2>/dev/null || echo 'n/a')"
+              # The API addresses the repository, never a sub-path action
+              # such as Homebrew/actions/setup-homebrew.
+              api_repo="$(echo "$repo" | cut -d/ -f1-2)"
+
+              # A comment naming a branch (`# stable`) marks a pin that
+              # tracks that branch: it is current when it is the branch
+              # head, and a release tag says nothing about it.
+              branch_head=""
+              if [[ "$comment" =~ ^[A-Za-z][A-Za-z0-9._/-]*$ ]]; then
+                branch_head="$(gh api "repos/$api_repo/branches/$comment" \
+                  --jq '.commit.sha' 2>/dev/null || true)"
+                [[ "$branch_head" =~ ^[0-9a-f]{40}$ ]] || branch_head=""
+              fi
+
+              if [ -n "$branch_head" ]; then
+                pinned="$comment @ ${sha:0:12}"
+                latest="$comment @ ${branch_head:0:12}"
+                drifted="$([ "$sha" != "$branch_head" ] && echo yes || echo no)"
+              else
+                # `gh api` prints an error body to stdout, so only a
+                # successful lookup may set the tag.
+                pinned="${comment:-(no comment)}"
+                latest="$(gh api "repos/$api_repo/releases/latest" \
+                  --jq '.tag_name' 2>/dev/null)" || latest=""
+                if [ -z "$latest" ]; then
+                  latest="$(gh api "repos/$api_repo/tags" --jq '.[0].name' \
+                    2>/dev/null)" || latest=""
+                fi
+                [ -n "$latest" ] || latest='n/a'
+                drifted="$([ "$latest" != "n/a" ] && [ -n "$comment" ] \
+                  && [ "$comment" != "$latest" ] && echo yes || echo no)"
               fi
 
               row="$(printf '| %s | %s | %s | %s |' \
-                "$wf_name" "$repo" "${comment:-(no comment)}" "$latest")"
+                "$wf_name" "$repo" "$pinned" "$latest")"
 
-              if [ "$latest" != "n/a" ] \
-                  && [ -n "$comment" ] \
-                  && [ "$comment" != "$latest" ]; then
+              if [ "$drifted" = yes ]; then
                 newer_rows+=("$row")
                 drift_count=$((drift_count + 1))
               else
@@ -199,7 +222,7 @@ jobs:
             if [ "${#newer_rows[@]}" -gt 0 ]; then
               echo "### \`newer\` (${#newer_rows[@]}) — needs attention"
               echo
-              echo '| Workflow | Action | Pinned (comment) | Latest tag |'
+              echo '| Workflow | Action | Pinned | Latest release or branch head |'
               echo '| --- | --- | --- | --- |'
               printf '%s\n' "${newer_rows[@]}"
               echo
@@ -207,7 +230,7 @@ jobs:
             if [ "${#ok_rows[@]}" -gt 0 ]; then
               echo "### \`ok\` (${#ok_rows[@]}) — up to date"
               echo
-              echo '| Workflow | Action | Pinned (comment) | Latest tag |'
+              echo '| Workflow | Action | Pinned | Latest release or branch head |'
               echo '| --- | --- | --- | --- |'
               printf '%s\n' "${ok_rows[@]}"
               echo
@@ -218,6 +241,6 @@ jobs:
           # Fail the job if any pin drifted, so the run flags red in the
           # Actions UI rather than quietly reporting in the summary tab.
           if [ "$drift_count" -gt 0 ]; then
-            echo "::warning::${drift_count} action pin(s) have newer releases; review the summary above."
+            echo "::warning::${drift_count} action pin(s) are behind their latest release or branch head; review the summary above."
             exit 1
           fi
