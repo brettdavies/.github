@@ -72,7 +72,9 @@ jobs:
           EXTRA_PATHS: ${{ inputs.extra_paths }}
         with:
           script: |
-            const { data: files } = await github.rest.pulls.listFiles({
+            // listFiles returns one page of at most 100 files; paginate reads
+            // all of them, up to the endpoint's 3000-file ceiling.
+            const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number,
