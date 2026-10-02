@@ -1,5 +1,7 @@
 # Reusable workflow to block compound-engineering docs from main.
-# Checks PRs for added/modified files in guarded docs paths.
+# Checks PRs for files that land in guarded docs paths: added, modified,
+# renamed, or copied. A removal passes, so a release can delete guarded docs
+# main still carries.
 #
 # Caller example:
 #   jobs:
@@ -115,7 +117,7 @@ jobs:
             };
             const matchers = allPatterns.map(globToRegExp);
             const forbidden = files
-              .filter(f => f.status === 'added' || f.status === 'modified')
+              .filter(f => f.status !== 'removed')
               .map(f => f.filename)
               .filter(f => matchers.some(m => m.test(f)));
             if (forbidden.length > 0) {

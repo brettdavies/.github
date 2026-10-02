@@ -63,9 +63,9 @@ Merging a feature PR to `main` IS the release: consumer repos pinning `@main` pi
 run. There is no promotion hop, no `release/*` branch, no cherry-pick, and no `vX.Y.Z` to encode.
 
 Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
-`docs/reviews/`, `docs/solutions/`) stay off `main`: `self-guard-main-docs.yml` blocks any `added` or `modified` files
-under those paths. New planning docs live in the solutions repo or local-only checkouts; the historical ones sit on the
-retired `dev` branch.
+`docs/reviews/`, `docs/solutions/`) stay off `main`: `self-guard-main-docs.yml` blocks any file added, modified,
+renamed, or copied under those paths. New planning docs live in the solutions repo or local-only checkouts; the
+historical ones sit on the retired `dev` branch.
 
 ## Prose scrubbing
 
