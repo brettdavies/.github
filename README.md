@@ -56,9 +56,12 @@ Full release pipeline: version check, audit, cross-platform build (7 targets —
 soft-fail by default), crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes extracted from the
 changelog the `changelog` input names, the repository root's `CHANGELOG.md` by default), Homebrew dispatch.
 
-With `attest: true`, a job after the release attests every archive and `sha256sum.txt` with build provenance, and
-attests a CycloneDX SBOM of the released binary against the archives. This workflow is the signer, so a release
-verifies with `gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
+With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
+CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
+publishes no crate and no release. Once the release exists, every published file is verified against its attestation,
+and the Homebrew dispatch goes out only when that passes. The signing job runs no code from the caller's repository;
+the SBOM is generated in a job of its own with a read-only token. This workflow is the signer, so a release verifies
+with `gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
 brettdavies/.github/.github/workflows/rust-release.yml`.
 
 |                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
