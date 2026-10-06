@@ -12,6 +12,7 @@
 #         linux_musl_required: true       # optional, default false
 #         linux_musl_verify_alpine: true  # optional, default false
 #         artifact_name: bird             # optional, default the crate name
+#         attest: true                    # optional, default false
 #       secrets:
 #         CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 #
@@ -21,7 +22,14 @@
 # Set linux_musl_verify_alpine: true to additionally exec the x86_64 musl
 # binary inside alpine:latest as a belt-and-suspenders compatibility check.
 #
-# Required caller permissions: contents: write, id-token: write
+# Set attest: true to attest every archive and sha256sum.txt with build
+# provenance, and to attest a CycloneDX SBOM of the released binary against the
+# archives. This workflow is the signer, so a release verifies with:
+#   gh attestation verify <archive> --repo <owner>/<repo> \
+#     --signer-workflow brettdavies/.github/.github/workflows/rust-release.yml
+#
+# Required caller permissions: contents: write, id-token: write, and with
+# attest: true also attestations: write
 name: Rust Release
 
 on:
@@ -57,6 +65,11 @@ on:
         default: ""
       windows_nasm:
         description: "Install NASM on the x86_64-pc-windows-msvc row before the build. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image and the cross rows provision it through the consumer's Cross.toml."
+        type: boolean
+        required: false
+        default: false
+      attest:
+        description: "Attest the release. Default false. When true, every archive and `sha256sum.txt` gets a build-provenance attestation, and a CycloneDX SBOM of the released binary is attested against the archives. The caller then grants `attestations: write` beside `id-token: write`."
         type: boolean
         required: false
         default: false
@@ -458,6 +471,80 @@ jobs:
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Runs after the release exists and gates nothing downstream, so a failed
+  # attestation leaves a complete release and a red job to re-run, never a
+  # half-published release.
+  #
+  # The job names no `permissions:` on purpose. A called workflow cannot hold
+  # more than its caller grants, and a job that named `attestations: write`
+  # would ask every caller for it, including the ones that leave `attest` off.
+  # The job takes the caller's grant instead, and a caller that turns `attest`
+  # on grants it.
+  attest:
+    needs: release
+    if: ${{ inputs.attest }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The subjects are the published bytes, fetched by the names the
+      # release's own checksum file lists. Assets added to the release later
+      # (Homebrew bottles) are not in that file, so a re-run attests the same
+      # set as the first run.
+      - name: Download the published archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release
+          cd release
+          gh release download "$GITHUB_REF_NAME" --pattern sha256sum.txt
+          awk '{ sub(/^\.\//, "", $2); print $2 }' sha256sum.txt | while read -r asset; do
+            gh release download "$GITHUB_REF_NAME" --pattern "$asset"
+          done
+          sha256sum --check sha256sum.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx@0.5.9 --locked
+
+      # `--describe binaries` writes `<bin>_bin.cdx.json` beside the manifest
+      # of each binary crate and leaves dev-dependencies out, so the SBOM lists
+      # what is compiled into the binary. `--target all` covers every archive's
+      # platform in the one document.
+      - name: Generate the CycloneDX SBOM
+        id: sbom
+        env:
+          CRATE: ${{ inputs.crate }}
+          BIN: ${{ inputs.bin }}
+        run: |
+          MANIFEST=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .manifest_path')
+          if [ -z "$MANIFEST" ]; then
+            echo "::error::No package named ${CRATE} in the workspace"
+            exit 1
+          fi
+          cargo cyclonedx --manifest-path "$MANIFEST" --format json --spec-version 1.5 \
+            --target all --describe binaries
+          SBOM="$(dirname "$MANIFEST")/${BIN}_bin.cdx.json"
+          if [ ! -f "$SBOM" ]; then
+            echo "::error::cargo-cyclonedx wrote no SBOM at ${SBOM}"
+            exit 1
+          fi
+          echo "path=${SBOM}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            release/*.tar.gz
+            release/*.zip
+          sbom-path: ${{ steps.sbom.outputs.path }}
 
   homebrew:
     needs: release
