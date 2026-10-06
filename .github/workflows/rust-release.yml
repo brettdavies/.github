@@ -12,6 +12,7 @@
 #         linux_musl_required: true       # optional, default false
 #         linux_musl_verify_alpine: true  # optional, default false
 #         artifact_name: bird             # optional, default the crate name
+#         attest: true                    # optional, default false
 #       secrets:
 #         CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 #
@@ -21,7 +22,17 @@
 # Set linux_musl_verify_alpine: true to additionally exec the x86_64 musl
 # binary inside alpine:latest as a belt-and-suspenders compatibility check.
 #
-# Required caller permissions: contents: write, id-token: write
+# Set attest: true to attest what the build jobs produced, before anything is
+# published: every archive and sha256sum.txt gets build provenance, and a
+# CycloneDX SBOM of the binary is attested against the archives. Nothing is
+# published unless that succeeds, and the Homebrew dispatch waits until every
+# published file has been verified against its attestation. This workflow is
+# the signer, so a release verifies with:
+#   gh attestation verify <archive> --repo <owner>/<repo> \
+#     --signer-workflow brettdavies/.github/.github/workflows/rust-release.yml
+#
+# Required caller permissions: contents: write, id-token: write, and with
+# attest: true also attestations: write
 name: Rust Release
 
 on:
@@ -57,6 +68,11 @@ on:
         default: ""
       windows_nasm:
         description: "Install NASM on the x86_64-pc-windows-msvc row before the build. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image and the cross rows provision it through the consumer's Cross.toml."
+        type: boolean
+        required: false
+        default: false
+      attest:
+        description: "Attest the release. Default false. When true, every archive the build jobs produced and `sha256sum.txt` get a build-provenance attestation and a CycloneDX SBOM of the binary is attested against the archives, all before anything is published; a failed attestation publishes nothing, and the Homebrew dispatch waits for every published file to verify. The caller then grants `attestations: write` beside `id-token: write`."
         type: boolean
         required: false
         default: false
@@ -359,8 +375,124 @@ jobs:
           name: ${{ inputs.artifact_name || inputs.crate }}-${{ matrix.target }}
           path: ${{ inputs.artifact_name || inputs.crate }}-${{ matrix.target }}.*
 
+  # The attestation leg is three jobs that run only when the caller sets
+  # `attest`: `sbom` and `attest` here, and `verify-attestations` after the
+  # release. They are separate so the job that signs runs no code from the
+  # repository or from crates.io. `sbom` runs cargo tooling and holds a
+  # read-only token; `attest` holds the signing permissions and runs only
+  # GitHub's own actions over files other jobs produced.
+  sbom:
+    needs: [check-version, audit]
+    if: ${{ inputs.attest }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx@0.5.9 --locked
+
+      # `--describe binaries` writes `<bin>_bin.cdx.json` beside the manifest
+      # of each binary crate and leaves dev-dependencies out, so the SBOM lists
+      # what is compiled into the binary. `--target all` covers every archive's
+      # platform in the one document.
+      - name: Generate the CycloneDX SBOM
+        env:
+          CRATE: ${{ inputs.crate }}
+          BIN: ${{ inputs.bin }}
+        run: |
+          MANIFEST=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .manifest_path')
+          if [ -z "$MANIFEST" ]; then
+            echo "::error::No package named ${CRATE} in the workspace"
+            exit 1
+          fi
+          cargo cyclonedx --manifest-path "$MANIFEST" --format json --spec-version 1.5 \
+            --target all --describe binaries
+          SBOM="$(dirname "$MANIFEST")/${BIN}_bin.cdx.json"
+          if [ ! -f "$SBOM" ]; then
+            echo "::error::cargo-cyclonedx wrote no SBOM at ${SBOM}"
+            exit 1
+          fi
+          mkdir sbom
+          cp "$SBOM" "sbom/${BIN}.cdx.json"
+
+      # Named so the release job's `<artifact>-*` glob over the downloaded
+      # artifacts does not match it.
+      - name: Upload the SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ inputs.artifact_name || inputs.crate }}
+          path: sbom/*.cdx.json
+          if-no-files-found: error
+
+  # Signs what the build jobs uploaded, before publish-crate, so a failed
+  # attestation publishes nothing.
+  #
+  # The job names no `permissions:` on purpose. GitHub checks every
+  # permission a called workflow's jobs name against the caller's grant when
+  # the run starts, whether or not the job then runs: a caller that leaves
+  # `attest` off and grants no `attestations: write` fails at startup if a
+  # job here names it. The job takes the caller's grant instead, and a
+  # caller that turns `attest` on grants it.
+  attest:
+    needs: [build, sbom]
+    if: ${{ inputs.attest }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the build's artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+
+      # The same shell as the release job's "Prepare release assets and
+      # checksums", so the two sets are the same bytes; `verify-attestations`
+      # fails the run if they ever are not.
+      - name: Assemble the release set
+        env:
+          ARTIFACT: ${{ inputs.artifact_name || inputs.crate }}
+        run: |
+          mkdir -p release
+          for dir in "artifacts/${ARTIFACT}-"*; do
+            [ ! -d "$dir" ] && continue
+            cp "$dir"/*.tar.gz "$dir"/*.zip release/ 2>/dev/null || true
+          done
+          cd release
+          if [ -z "$(ls -A)" ]; then
+            echo "::error::No release artifacts found"
+            exit 1
+          fi
+          sha256sum ./* > sha256sum.txt
+          ls -la
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/*.tar.gz
+            release/*.zip
+          sbom-path: artifacts/sbom-${{ inputs.artifact_name || inputs.crate }}/${{ inputs.bin }}.cdx.json
+
+  # `attest` is skipped for a caller that leaves the input off, and a job
+  # whose ancestor was skipped is itself skipped unless its `if` names a
+  # status function. So this job and the two below state what they wait for:
+  # each runs when the jobs it needs succeeded. A skipped attestation job is
+  # nothing to wait for only when the input is off: with it on, `attest` is
+  # also skipped when `sbom` fails, and that must publish nothing.
   publish-crate:
-    needs: build
+    needs: [build, attest]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.attest.result == 'success' || (!inputs.attest && needs.attest.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -390,6 +522,7 @@ jobs:
 
   release:
     needs: [build, publish-crate]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.publish-crate.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -459,8 +592,55 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  homebrew:
+  # Downloads what the release published and checks each file against the
+  # attestations `attest` made, with the command a user is told to run. A
+  # file that was changed after it was signed, or a release set that drifted
+  # from the attested one, fails here and the Homebrew dispatch does not go
+  # out. Like `attest`, the job names no `permissions:` and takes the
+  # caller's grant.
+  verify-attestations:
     needs: release
+    if: ${{ inputs.attest }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # This file. `github.workflow_ref` names the caller inside a called
+      # workflow, so the signer is spelled out.
+      SIGNER: brettdavies/.github/.github/workflows/rust-release.yml
+    steps:
+      # Fetched by the names the release's own checksum file lists. Assets
+      # added to the release later (Homebrew bottles) are not in that file,
+      # so a re-run checks the same set as the first run.
+      - name: Download the published archives
+        run: |
+          mkdir release
+          cd release
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern sha256sum.txt
+          awk '{ sub(/^\.\//, "", $2); print $2 }' sha256sum.txt | while read -r asset; do
+            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$asset"
+          done
+          sha256sum --check sha256sum.txt
+
+      - name: Verify build provenance
+        working-directory: release
+        run: |
+          for file in *; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER"
+          done
+
+      - name: Verify the SBOM attestation
+        working-directory: release
+        run: |
+          for file in *.tar.gz *.zip; do
+            [ -e "$file" ] || continue
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
+              --predicate-type https://cyclonedx.org/bom
+          done
+
+  homebrew:
+    needs: [release, verify-attestations]
+    if: ${{ !cancelled() && needs.release.result == 'success' && (needs.verify-attestations.result == 'success' || (!inputs.attest && needs.verify-attestations.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
