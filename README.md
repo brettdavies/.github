@@ -17,6 +17,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
     workflows/
       rust-ci.yml           # reusable CI workflow
       rust-release.yml      # reusable release workflow (binary crate)
+      rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
       lint.yml              # internal: actionlint on push/PR
@@ -93,6 +94,52 @@ jobs:
       bin: bird
     secrets:
       CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
+```
+
+### `rust-release-matrix-check.yml`
+
+Builds the seven targets `rust-release.yml` builds, and releases nothing. The release build runs only on a tag push, so
+without this a dependency that breaks a cross-compiled target is found while cutting the release, after the tag exists.
+A caller runs it when its dependency graph or toolchain pin changes and on every release branch.
+
+Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
+passes `linux_musl_required: true`, a red row here means the release would fail on the same row.
+
+The matrix holds the same rows as the release build's. `scripts/check-release-matrix-parity.sh` compares the two by
+target, runner, and cross flag, and fails this repo's lint run when they differ.
+
+|                                 |                  |
+| ------------------------------- | ---------------- |
+| **Trigger**                     | `workflow_call`  |
+| **Inputs**                      | None             |
+| **Secrets**                     | None             |
+| **Required caller permissions** | `contents: read` |
+
+Triggers, path filters, and the concurrency group belong to the caller, because which paths can break a build differs
+per repo.
+
+**Caller example:**
+
+```yaml
+name: Release matrix check
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/release-matrix-check.yml
+  push:
+    branches: ['release/**']
+permissions:
+  contents: read
+concurrency:
+  group: release-matrix-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    uses: brettdavies/.github/.github/workflows/rust-release-matrix-check.yml@main
 ```
 
 ### `rust-lib-release.yml`
