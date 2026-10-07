@@ -15,6 +15,7 @@ else
 fi
 
 bash scripts/check-workflow-concurrency.sh
+bash scripts/check-release-matrix-parity.sh
 
 if command -v markdownlint-cli2 >/dev/null 2>&1; then
   markdownlint-cli2 "**/*.md"

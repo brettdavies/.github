@@ -24,6 +24,16 @@ jobs:
       - name: Check concurrency group namespacing
         run: bash scripts/check-workflow-concurrency.sh
 
+  # Holds the pre-tag build check to the rows the release builds. A row missing
+  # from the check fails no run, so only this comparison reports it.
+  release-matrix-parity:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check release matrix parity
+        run: bash scripts/check-release-matrix-parity.sh
+
   actionlint:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
