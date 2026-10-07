@@ -82,7 +82,9 @@ to consumer repos. Currently only `guard-main-docs.yml` is wired this way (via `
 The self-applied caller filename always differs from the reusable to avoid a self-collision. Pattern for any future
 guard reusable: add a thin self-applied caller (different filename, `./...` path reference, job-key matching the
 standard convention so the status-check name is stable). The Rust-oriented reusables (`rust-ci.yml`, `rust-release.yml`,
-`rust-finalize-release.yml`) are not self-applied because this repo is not a Rust crate.
+`rust-finalize-release.yml`) are not self-applied because this repo is not a Rust crate. Nor is `search-presence.yml`,
+which needs a site and its Google and Bing credentials; `scripts/check-search-presence-workflow.sh` holds its state and
+scope properties in the lint run instead.
 
 ## Branch protection
 
