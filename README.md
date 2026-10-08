@@ -280,11 +280,13 @@ jobs:
 
 A search regression gate for a site repository, run after a deployment. It audits what the deployed site serves crawlers
 with the search-presence skill (robots.txt, sitemaps, status codes, noindex, canonicals, on-page tags, headers, and host
-redirects), writes the rows to the job summary, and fails the job on any row at or above the config's `fail_on` level:
-`fail` by default, or `warn` to block on warnings as well. An audit that cannot finish fails the job too.
+redirects) and fails the job on any row at or above the config's `fail_on` level: `fail` by default, or `warn` to block
+on warnings as well. The job summary gives the count of rows per status and each blocking row with its next step. An
+audit that cannot finish fails the job too, with a line in the summary saying so.
 
-The workflow reads `origin` and `fail_on` from the site's `search-presence.toml` and audits that origin, so call it
-once the deployment is live there. The audit sends the skill's own User-Agent and only reads the site.
+The skill reads the site's `search-presence.toml` itself: it audits the config's `origin`, leaves out its `private`
+hosts, reads its `sitemaps` when robots.txt declares none, and blocks at its `fail_on` level, so call the workflow once
+the deployment is live at that origin. The audit sends the skill's own User-Agent and only reads the site.
 
 The gate submits nothing, reads no search-engine data, and keeps no state between runs. Submission to Bing and IndexNow,
 Google index state and the Request indexing queue, trends, and the per-site issue run locally once the deployment is
@@ -346,8 +348,8 @@ gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/prote
 - No `secrets: inherit` — secrets are passed explicitly
 - All `${{ }}` expressions in `run:` blocks use `env:` indirection (zero direct interpolation)
 - Input validation: `crate` and `bin` are validated with `[a-zA-Z0-9_-]+` regex
-- `search-presence.yml` refuses a `config` path outside the repository, and an `origin` that is not a plain http(s)
-  origin with an ASCII host
+- `search-presence.yml` refuses a `config` path outside the repository and hands the skill the config by path, so no
+  config value reaches a shell
 - Tag format validation in finalize-release (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 - Per-job permission narrowing inside reusable workflows
 

@@ -1,7 +1,7 @@
 # Reusable post-deploy search regression gate for a site repository. Runs the
-# search-presence skill's audit of what the deployed site serves crawlers
-# against the origin in the site's search-presence.toml, writes the rows to the
-# job summary, and fails the job on rows at or above the config's fail_on
+# search-presence skill's audit of what the deployed site serves crawlers, with
+# the site's search-presence.toml as its config, writes the audit's summary to
+# the job summary, and fails the job on rows at or above the config's fail_on
 # level, or when the audit cannot finish.
 #
 # The audit only reads the live site, so the job holds no search-engine
@@ -110,84 +110,23 @@ jobs:
           version: "0.12.17"
           enable-cache: false
 
-      - name: Read the site config
-        id: config
+      - name: Audit the deployed site
         working-directory: site
         env:
           CONFIG: ${{ inputs.config }}
         run: |
-          if [ ! -f "$CONFIG" ]; then
-            echo "::error::No site config at $CONFIG. Commit a search-presence.toml, or pass its path as the config input."
-            exit 1
-          fi
-          normalized="$RUNNER_TEMP/search-presence-config.json"
           status=0
-          uv run --script "$SKILL_DIR/scripts/fleet.py" validate --config "$CONFIG" --json >"$normalized" || status=$?
-          if [ "$status" -ne 0 ]; then
-            cat "$normalized"
-            echo "::error::$CONFIG is not a valid site config (fleet.py validate exited $status)."
-            exit 1
-          fi
-          origin=$(jq -r '.configs[0].origin' "$normalized")
-          fail_on=$(jq -r '.configs[0].fail_on' "$normalized")
-          if [[ ! "$origin" =~ ^https?://[a-z0-9.-]+(:[0-9]+)?$ ]]; then
-            echo "::error::The config's origin is not a plain http(s) origin with an ASCII host: $origin"
-            exit 1
-          fi
-          case "$fail_on" in
-            fail | warn) ;;
+          uv run --script "$SKILL_DIR/scripts/audit_indexability.py" --config "$CONFIG" --format summary \
+            >>"$GITHUB_STEP_SUMMARY" || status=$?
+          case "$status" in
+            0) ;;
+            1)
+              echo "::error::The audit found rows at or above the config's fail_on level; the job summary lists them."
+              exit 1
+              ;;
             *)
-              echo "::error::The config's fail_on is neither fail nor warn: $fail_on"
+              echo "The audit of $CONFIG did not finish (exit $status); the job log has its error." >>"$GITHUB_STEP_SUMMARY"
+              echo "::error::audit_indexability.py exited $status without a report."
               exit 1
               ;;
           esac
-          {
-            echo "origin=$origin"
-            echo "fail_on=$fail_on"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Audit the deployed site
-        env:
-          ORIGIN: ${{ steps.config.outputs.origin }}
-          FAIL_ON: ${{ steps.config.outputs.fail_on }}
-        run: |
-          report="$RUNNER_TEMP/search-presence-audit.json"
-          status=0
-          uv run --script "$SKILL_DIR/scripts/audit_indexability.py" "$ORIGIN" --json >"$report" || status=$?
-          if ! jq -e '.rows | type == "array"' "$report" >/dev/null 2>&1; then
-            cat "$report"
-            message=$(jq -r '.error.message // empty' "$report" 2>/dev/null || true)
-            echo "::error::audit_indexability.py exited $status without a report${message:+: $message}"
-            echo "The audit of $ORIGIN did not finish (exit $status)${message:+: $message}" >>"$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          blocking=$(jq --arg level "$FAIL_ON" \
-            '[.rows[] | select(.status == "fail" or ($level == "warn" and .status == "warn"))] | length' "$report")
-          jq -r --arg level "$FAIL_ON" '
-            def cell: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
-            def rank: {"fail": 0, "warn": 1, "unknown": 2}[.status];
-            def next: .next_step
-              | if .action == "none" then "" elif (.command // "") != "" then "`\(.command)`" else .docs // "" end;
-            .rows as $rows
-            | [$rows[] | select(rank != null)] as $open
-            | "### Search regression gate: \(.origin)",
-              "",
-              "Blocks on `\($level)`\(if $level == "warn" then " and `fail`" else "" end) rows. "
-                + "Requests sent as `\(.identity.user_agent // "unrecorded")`.",
-              "",
-              ([["fail", "warn", "unknown", "info", "pass", "n/a"][] as $s
-                | ($rows | map(select(.status == $s)) | length) as $n
-                | select($n > 0) | "\($n) \($s)"] | join(", ")),
-              "",
-              if ($open | length) == 0 then "No fail, warn, or unknown rows."
-              else
-                "| Status | Row | Check | Subject | Detail | Next step |",
-                "| --- | --- | --- | --- | --- | --- |",
-                ($open | sort_by(rank)[]
-                  | "| \(.status) | \(.id) | \(.title | cell) | \(.subject // "" | cell) | \(.detail | cell) | \(next | cell) |")
-              end
-          ' "$report" >>"$GITHUB_STEP_SUMMARY"
-          if [ "$status" -ne 0 ] || [ "$blocking" -gt 0 ]; then
-            echo "::error::The audit of $ORIGIN exited $status with $blocking row(s) at or above fail_on ($FAIL_ON); the job summary lists them."
-            exit 1
-          fi
