@@ -20,7 +20,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
-      search-presence.yml   # reusable post-deploy search monitoring for a site
+      search-presence.yml   # reusable post-deploy search regression gate for a site
       lint.yml              # internal: actionlint on push/PR
 ```
 
@@ -278,36 +278,27 @@ jobs:
 
 ### `search-presence.yml`
 
-Search monitoring for a site repository, run after each deploy. It runs the search-presence skill against the site's
-`search-presence.toml`: the audit of what the site serves crawlers, submission of new and changed URLs to IndexNow,
-Bing, and the Google sitemap, the Request indexing queue for the pages each deployment changed, the Search Console and
-Bing index reads, and the report. The report goes to the job summary and to the site's one issue, which each run opens,
-rebuilds, or closes. The job fails when a finding is at or above the config's `fail_on`, so that level lives in the
-config.
+A search regression gate for a site repository, run after a deploy. It audits what the deployed site serves crawlers
+with the search-presence skill (robots.txt, sitemaps, status codes, noindex, canonicals, on-page tags, headers, and host
+redirects), writes the rows to the job summary, and fails the job on any row at or above the config's `fail_on` level:
+`fail` by default, or `warn` to block on warnings as well. An audit that cannot finish fails the job too.
 
-Google is read with no stored key: Workload Identity Federation exchanges the job's OIDC token for a Search Console
-access token, read-only unless `apply` is set, and the run puts it in the variable the config's `google.token_env`
-names. A config with no `[google]` table skips Google.
+The workflow reads `origin` and `fail_on` from the site's `search-presence.toml` and audits that origin, so the deploy
+must be live there when the job starts. The audit sends the skill's own User-Agent and only reads the site.
 
-The quota ledger, the submission ledger, the coverage cache, and the snapshots live in the Actions cache under one key
-prefix per site. Each run restores them first and saves them last, whether it passed or failed, and runs for one
-repository and config queue rather than overlap. Only `push`, `schedule`, and `workflow_dispatch` runs on the default
-branch save state that later runs on that branch restore.
+The gate submits nothing, reads no search-engine data, and keeps no state between runs. Submission to Bing and IndexNow,
+Google index state and the Request indexing queue, trends, and the per-site issue run locally once the deploy is live;
+the search-presence skill's documentation covers that run.
 
-Submissions are a dry run unless `apply: true`. A submission ledger that has never seen the site, including one whose
-cache entry was evicted, holds every URL until the first-run choice: give one run `apply: true` and
-`first_run: baseline` (record the current state, send nothing) or `first_run: submit` (send every URL, for a new site),
-then leave `first_run` empty.
+A newer run for the same repository and config cancels one in progress, since the newer audit describes the live site.
+A caller with several sites calls the workflow once per config.
 
-The job summary and the issue show every finding's detail, impression and click totals included, to anyone who can read
-the repository.
-
-|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| **Inputs**                      | `config` (string, optional, default `search-presence.toml`), `apply` (bool, optional, default `false`; send submissions and ask for the read-write Search Console scope), `first_run` (string, optional, `baseline` or `submit`, default empty), `deployed_at` (string, optional, ISO 8601 with a zone, default the job's start), `skill_repository` (string, optional, default the skill's repository), `skill_ref` (string, optional, default `main`)                                              |
-| **Secrets**                     | `SEARCH_PRESENCE_SKILL_TOKEN` (required; fine-grained PAT with Contents: read on the skill's repository only), `SEARCH_PRESENCE_WIF_PROVIDER` (required; the workload identity provider's full resource name), `SEARCH_PRESENCE_SERVICE_ACCOUNT` (required; the service account's email, a user on the Search Console property), `BING_WEBMASTER_API_KEY` (required), `INDEXNOW_KEY` (optional; without it IndexNow is skipped), `GOOGLE_API_KEY` (optional; without it Core Web Vitals are skipped) |
-| **Required caller permissions** | `contents: read`, `id-token: write`, `issues: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+|                                 |                                                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                    |
+| **Inputs**                      | `config` (string, optional, default `search-presence.toml`), `skill_repository` (string, optional, default the skill's repository), `skill_ref` (string, optional, default `main`) |
+| **Secrets**                     | `SEARCH_PRESENCE_SKILL_TOKEN` (required; fine-grained PAT with Contents: read on the skill's repository only)                                                                      |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                   |
 
 **Caller example:**
 
@@ -328,16 +319,9 @@ jobs:
     uses: brettdavies/.github/.github/workflows/search-presence.yml@main
     permissions:
       contents: read
-      id-token: write
-      issues: write
     secrets:
       SEARCH_PRESENCE_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
-      SEARCH_PRESENCE_WIF_PROVIDER: ${{ secrets.SEARCH_PRESENCE_WIF_PROVIDER }}
-      SEARCH_PRESENCE_SERVICE_ACCOUNT: ${{ secrets.SEARCH_PRESENCE_SERVICE_ACCOUNT }}
-      BING_WEBMASTER_API_KEY: ${{ secrets.BING_WEBMASTER_API_KEY }}
 ```
-
-Pass `INDEXNOW_KEY` and `GOOGLE_API_KEY` the same way to turn on IndexNow and Core Web Vitals.
 
 ## Ruleset templates
 
@@ -362,8 +346,8 @@ gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/prote
 - No `secrets: inherit` — secrets are passed explicitly
 - All `${{ }}` expressions in `run:` blocks use `env:` indirection (zero direct interpolation)
 - Input validation: `crate` and `bin` are validated with `[a-zA-Z0-9_-]+` regex
-- `search-presence.yml` validates `config`, `first_run`, and `deployed_at`, and refuses a `google.token_env` that names
-  a variable the runner or the workflow already sets
+- `search-presence.yml` refuses a `config` path outside the repository, and an `origin` that is not a plain http(s)
+  origin with an ASCII host
 - Tag format validation in finalize-release (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 - Per-job permission narrowing inside reusable workflows
 

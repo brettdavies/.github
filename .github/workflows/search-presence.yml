@@ -1,7 +1,13 @@
-# Reusable post-deploy search monitoring for a site repository. Runs the
-# search-presence skill against the site's search-presence.toml: the audit,
-# change-driven submission, the deploy queue, Search Console and Bing reads,
-# and the report, written to the job summary and the site's issue.
+# Reusable post-deploy search regression gate for a site repository. Runs the
+# search-presence skill's audit of what the deployed site serves crawlers
+# against the origin in the site's search-presence.toml, writes the rows to the
+# job summary, and fails the job on rows at or above the config's fail_on
+# level, or when the audit cannot finish.
+#
+# The audit only reads the live site, so the job holds no search-engine
+# credentials. Submission, Google index state, the Request indexing queue,
+# the trend report, and the per-site issue run on a workstation once the
+# deploy is live.
 #
 # Caller example:
 #   jobs:
@@ -10,15 +16,10 @@
 #       uses: brettdavies/.github/.github/workflows/search-presence.yml@main
 #       permissions:
 #         contents: read
-#         id-token: write
-#         issues: write
 #       secrets:
 #         SEARCH_PRESENCE_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
-#         SEARCH_PRESENCE_WIF_PROVIDER: ${{ secrets.SEARCH_PRESENCE_WIF_PROVIDER }}
-#         SEARCH_PRESENCE_SERVICE_ACCOUNT: ${{ secrets.SEARCH_PRESENCE_SERVICE_ACCOUNT }}
-#         BING_WEBMASTER_API_KEY: ${{ secrets.BING_WEBMASTER_API_KEY }}
 #
-# Required caller permissions: contents: read, id-token: write, issues: write
+# Required caller permissions: contents: read
 name: Search Presence
 
 on:
@@ -29,21 +30,6 @@ on:
         type: string
         required: false
         default: search-presence.toml
-      apply:
-        description: "Send new and changed URLs to IndexNow, Bing, and the Google sitemap, and ask Google for the read-write Search Console scope. Default false: the submission plan is a dry run and the scope is read-only."
-        type: boolean
-        required: false
-        default: false
-      first_run:
-        description: "The first-run choice for a submission ledger that has never seen the site: `baseline` records each URL's state and sends nothing, `submit` sends every URL. Empty by default. Pass it on one run with `apply`, when a run reports that the ledger holds nothing for the site."
-        type: string
-        required: false
-        default: ""
-      deployed_at:
-        description: "When the deployment went live, as an ISO 8601 time with a zone (2026-10-07T12:00:00Z). Empty means the time this job started."
-        type: string
-        required: false
-        default: ""
       skill_repository:
         description: "The repository that holds the search-presence skill"
         type: string
@@ -58,71 +44,38 @@ on:
       SEARCH_PRESENCE_SKILL_TOKEN:
         description: "Fine-grained PAT with Contents: read on the skill's repository only"
         required: true
-      SEARCH_PRESENCE_WIF_PROVIDER:
-        description: "Full resource name of the workload identity provider that trusts this repository"
-        required: true
-      SEARCH_PRESENCE_SERVICE_ACCOUNT:
-        description: "Email of the service account the provider impersonates, a user on the Search Console property"
-        required: true
-      BING_WEBMASTER_API_KEY:
-        description: "Bing Webmaster API key for the account that lists the site"
-        required: true
-      INDEXNOW_KEY:
-        description: "The site host's IndexNow key, whose key file the site serves. Without it, IndexNow is skipped."
-        required: false
-      GOOGLE_API_KEY:
-        description: "Google API key for the Chrome UX Report API. Without it, Core Web Vitals are skipped."
-        required: false
-
-# Serializes rather than cancels: each run restores the site's state, spends
-# quota and records submissions against it, and saves it at the end, so a run
-# that overlaps another saves over the ledger entries the other recorded. The
-# site's host lives in the config, which no expression here can read, so the
-# group is keyed on the repository and the config path.
-concurrency:
-  group: search-presence-${{ github.repository }}-${{ inputs.config }}
-  cancel-in-progress: false
 
 permissions:
   contents: read
-  id-token: write
-  issues: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  monitor:
+  audit:
     runs-on: ubuntu-22.04
-    # The Search Console access token lasts an hour.
-    timeout-minutes: 60
+    timeout-minutes: 15
+    # On the job rather than the workflow, keyed on the config: a caller may
+    # call this once per site in one run, and a workflow-level group would put
+    # those calls in one group. The audit only reads the live site, so a newer
+    # run for the same config supersedes an older one and cancelling it loses
+    # nothing.
+    concurrency:
+      group: search-presence-${{ github.repository }}-${{ inputs.config }}
+      cancel-in-progress: true
     defaults:
       run:
         shell: bash
     env:
       SKILL_DIR: ${{ github.workspace }}/skill/search-presence
-      STATE_DIR: ${{ github.workspace }}/search-presence-state
     steps:
-      - name: Check inputs and secrets
-        id: inputs
+      - name: Check the inputs and the skill token
         env:
           CONFIG: ${{ inputs.config }}
-          FIRST_RUN: ${{ inputs.first_run }}
-          DEPLOYED_AT: ${{ inputs.deployed_at }}
           HAS_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN != '' }}
-          HAS_WIF_PROVIDER: ${{ secrets.SEARCH_PRESENCE_WIF_PROVIDER != '' }}
-          HAS_SERVICE_ACCOUNT: ${{ secrets.SEARCH_PRESENCE_SERVICE_ACCOUNT != '' }}
-          HAS_BING_KEY: ${{ secrets.BING_WEBMASTER_API_KEY != '' }}
-          HAS_INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY != '' }}
-          HAS_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY != '' }}
         run: |
-          missing=()
-          [ "$HAS_SKILL_TOKEN" = true ] || missing+=(SEARCH_PRESENCE_SKILL_TOKEN)
-          [ "$HAS_WIF_PROVIDER" = true ] || missing+=(SEARCH_PRESENCE_WIF_PROVIDER)
-          [ "$HAS_SERVICE_ACCOUNT" = true ] || missing+=(SEARCH_PRESENCE_SERVICE_ACCOUNT)
-          [ "$HAS_BING_KEY" = true ] || missing+=(BING_WEBMASTER_API_KEY)
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Required secrets are empty: ${missing[*]}. Create them in the calling repository and pass each under secrets:."
+          if [ "$HAS_SKILL_TOKEN" != true ]; then
+            echo "::error::SEARCH_PRESENCE_SKILL_TOKEN is empty. Create it in the calling repository and pass it under secrets:."
             exit 1
           fi
           case "$CONFIG" in
@@ -131,29 +84,6 @@ jobs:
               exit 1
               ;;
           esac
-          case "$FIRST_RUN" in
-            '' | baseline | submit) ;;
-            *)
-              echo "::error::first_run must be empty, baseline, or submit: $FIRST_RUN"
-              exit 1
-              ;;
-          esac
-          if [ -z "$DEPLOYED_AT" ]; then
-            DEPLOYED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          elif [[ ! "$DEPLOYED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then
-            echo "::error::deployed_at must be an ISO 8601 time with a zone, such as 2026-10-07T12:00:00Z: $DEPLOYED_AT"
-            exit 1
-          fi
-          echo "deployed_at=$DEPLOYED_AT" >>"$GITHUB_OUTPUT"
-          echo "vitals=$HAS_GOOGLE_API_KEY" >>"$GITHUB_OUTPUT"
-          {
-            if [ "$HAS_INDEXNOW_KEY" != true ]; then
-              echo "- Skipped IndexNow: no \`INDEXNOW_KEY\` secret was passed."
-            fi
-            if [ "$HAS_GOOGLE_API_KEY" != true ]; then
-              echo "- Skipped Core Web Vitals: no \`GOOGLE_API_KEY\` secret was passed."
-            fi
-          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Check out the site
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -198,171 +128,66 @@ jobs:
             echo "::error::$CONFIG is not a valid site config (fleet.py validate exited $status)."
             exit 1
           fi
-          site=$(jq -r '.configs[0].site' "$normalized")
-          if [[ ! "$site" =~ ^[a-z0-9.-]+$ ]]; then
-            echo "::error::The config's origin gives an unexpected host: $site"
+          origin=$(jq -r '.configs[0].origin' "$normalized")
+          fail_on=$(jq -r '.configs[0].fail_on' "$normalized")
+          if [[ ! "$origin" =~ ^https?://[a-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "::error::The config's origin is not a plain http(s) origin with an ASCII host: $origin"
             exit 1
           fi
-          token_env=""
-          property=""
-          if [ "$(jq -r '.configs[0].google != null' "$normalized")" = true ]; then
-            token_env=$(jq -r '.configs[0].google.token_env // ""' "$normalized")
-            property=$(jq -r '.configs[0].google.property' "$normalized")
-            if [ -z "$token_env" ]; then
-              echo "::error::$CONFIG has a [google] table with no token_env. Set google.token_env to the variable name this workflow fills with the Search Console access token."
+          case "$fail_on" in
+            fail | warn) ;;
+            *)
+              echo "::error::The config's fail_on is neither fail nor warn: $fail_on"
               exit 1
-            fi
-            if [[ ! "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-              echo "::error::google.token_env is not a variable name: $token_env"
-              exit 1
-            fi
-            case "$token_env" in
-              BING_WEBMASTER_API_KEY | INDEXNOW_KEY | GOOGLE_API_KEY | GH_TOKEN)
-                echo "::error::google.token_env names a variable this workflow sets for another purpose: $token_env"
-                exit 1
-                ;;
-            esac
-            if [ -n "${!token_env+set}" ]; then
-              echo "::error::google.token_env names a variable the runner already sets: $token_env"
-              exit 1
-            fi
-          else
-            echo "- Skipped Google Search Console: $CONFIG has no \`[google]\` table." >>"$GITHUB_STEP_SUMMARY"
-          fi
-          mkdir -p "$STATE_DIR"
+              ;;
+          esac
           {
-            echo "normalized=$normalized"
-            echo "site=$site"
-            echo "cache_prefix=search-presence-$site-"
-            echo "token_env=$token_env"
-            echo "property=$property"
+            echo "origin=$origin"
+            echo "fail_on=$fail_on"
           } >>"$GITHUB_OUTPUT"
 
-      - name: Authenticate to Google
-        id: auth
-        if: steps.config.outputs.token_env != ''
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ secrets.SEARCH_PRESENCE_WIF_PROVIDER }}
-          service_account: ${{ secrets.SEARCH_PRESENCE_SERVICE_ACCOUNT }}
-          token_format: access_token
-          # The action's default scope, cloud-platform, does not cover Search
-          # Console. Resubmitting a sitemap needs the read-write scope.
-          access_token_scopes: ${{ inputs.apply && 'https://www.googleapis.com/auth/webmasters' || 'https://www.googleapis.com/auth/webmasters.readonly' }}
-          create_credentials_file: false
-          export_environment_variables: false
-
-      - name: Restore state
-        id: restore
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.STATE_DIR }}
-          key: ${{ steps.config.outputs.cache_prefix }}${{ github.run_id }}
-          restore-keys: ${{ steps.config.outputs.cache_prefix }}
-
-      - name: Submit new and changed URLs
-        id: submit
+      - name: Audit the deployed site
         env:
-          APPLY: ${{ inputs.apply }}
-          FIRST_RUN: ${{ inputs.first_run }}
-          NORMALIZED: ${{ steps.config.outputs.normalized }}
-          PROPERTY: ${{ steps.config.outputs.property }}
-          TOKEN_ENV: ${{ steps.config.outputs.token_env }}
-          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          BING_WEBMASTER_API_KEY: ${{ secrets.BING_WEBMASTER_API_KEY }}
-          INDEXNOW_KEY: ${{ secrets.INDEXNOW_KEY }}
+          ORIGIN: ${{ steps.config.outputs.origin }}
+          FAIL_ON: ${{ steps.config.outputs.fail_on }}
         run: |
-          mapfile -d '' -t args < <(jq -j '.configs[0]
-            | ["--origin", .origin, "--bing-site", .bing.site]
-              + [.sitemaps[] | ("--sitemap", .)]
-              + [.private[] | ("--private", .)]
-            | .[] | . + "\u0000"' "$NORMALIZED")
-          if [ -n "$TOKEN_ENV" ]; then
-            export "$TOKEN_ENV=$ACCESS_TOKEN"
-            args+=(--site "$PROPERTY" --token-env "$TOKEN_ENV")
-          fi
-          unset ACCESS_TOKEN
-          if [ -n "$FIRST_RUN" ]; then
-            args+=(--first-run "$FIRST_RUN")
-          fi
-          if [ "$APPLY" = true ]; then
-            args+=(--apply)
-          fi
-          report="$RUNNER_TEMP/search-presence-submit.json"
+          report="$RUNNER_TEMP/search-presence-audit.json"
           status=0
-          uv run --script "$SKILL_DIR/scripts/submit.py" "${args[@]}" --state-dir "$STATE_DIR" --json >"$report" || status=$?
-          if [ "$status" -gt 1 ]; then
+          uv run --script "$SKILL_DIR/scripts/audit_indexability.py" "$ORIGIN" --json >"$report" || status=$?
+          if ! jq -e '.rows | type == "array"' "$report" >/dev/null 2>&1; then
+            cat "$report"
             message=$(jq -r '.error.message // empty' "$report" 2>/dev/null || true)
-            echo "::warning::submit.py exited $status${message:+: $message}"
-            echo "- Submission did not finish (exit $status)${message:+: $message}" >>"$GITHUB_STEP_SUMMARY"
-          fi
-          echo "report=$report" >>"$GITHUB_OUTPUT"
-
-      - name: Run the checks
-        id: fleet
-        working-directory: site
-        env:
-          CONFIG: ${{ inputs.config }}
-          DEPLOYED_AT: ${{ steps.inputs.outputs.deployed_at }}
-          VITALS: ${{ steps.inputs.outputs.vitals }}
-          SUBMIT_REPORT: ${{ steps.submit.outputs.report }}
-          TOKEN_ENV: ${{ steps.config.outputs.token_env }}
-          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          BING_WEBMASTER_API_KEY: ${{ secrets.BING_WEBMASTER_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        run: |
-          args=(run --config "$CONFIG" --deployed-at "$DEPLOYED_AT" --submit-report "$SUBMIT_REPORT" --state-dir "$STATE_DIR")
-          if [ "$VITALS" = true ]; then
-            args+=(--vitals)
-          fi
-          if [ -n "$TOKEN_ENV" ]; then
-            export "$TOKEN_ENV=$ACCESS_TOKEN"
-          fi
-          unset ACCESS_TOKEN
-          result="$RUNNER_TEMP/search-presence-fleet.json"
-          status=0
-          uv run --script "$SKILL_DIR/scripts/fleet.py" "${args[@]}" --json >"$result" || status=$?
-          snapshot=$(jq -r '.sites[0].snapshot // empty' "$result" 2>/dev/null || true)
-          if [ "$status" -ne 0 ] || [ -z "$snapshot" ]; then
-            cat "$result"
-            echo "::error::fleet.py run exited $status without a snapshot."
+            echo "::error::audit_indexability.py exited $status without a report${message:+: $message}"
+            echo "The audit of $ORIGIN did not finish (exit $status)${message:+: $message}" >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "snapshot=$snapshot" >>"$GITHUB_OUTPUT"
-
-      - name: Write the job summary
-        id: render
-        env:
-          SNAPSHOT: ${{ steps.fleet.outputs.snapshot }}
-        run: |
-          status=0
-          uv run --script "$SKILL_DIR/scripts/report.py" render "$SNAPSHOT" --format summary >>"$GITHUB_STEP_SUMMARY" || status=$?
-          echo "exit_code=$status" >>"$GITHUB_OUTPUT"
-
-      - name: Update the site's issue
-        env:
-          SNAPSHOT: ${{ steps.fleet.outputs.snapshot }}
-          REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-        run: uv run --script "$SKILL_DIR/scripts/report.py" issue "$SNAPSHOT" --repo "$REPO" --apply
-
-      # The combined actions/cache saves only when the job succeeds, and a run
-      # that fails on its findings has still spent quota and sent submissions.
-      - name: Save state
-        if: always() && steps.restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.STATE_DIR }}
-          key: ${{ steps.config.outputs.cache_prefix }}${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: Fail on blocking findings
-        if: steps.render.outputs.exit_code != '0'
-        env:
-          RENDER_EXIT: ${{ steps.render.outputs.exit_code }}
-        run: |
-          if [ "$RENDER_EXIT" = 1 ]; then
-            echo "::error::Findings at or above the config's fail_on level remain; the job summary lists them."
-          else
-            echo "::error::report.py render exited $RENDER_EXIT."
+          blocking=$(jq --arg level "$FAIL_ON" \
+            '[.rows[] | select(.status == "fail" or ($level == "warn" and .status == "warn"))] | length' "$report")
+          jq -r --arg level "$FAIL_ON" '
+            def cell: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+            def rank: {"fail": 0, "warn": 1, "unknown": 2}[.status];
+            def next: .next_step
+              | if .action == "none" then "" elif (.command // "") != "" then "`\(.command)`" else .docs // "" end;
+            .rows as $rows
+            | [$rows[] | select(rank != null)] as $open
+            | "### Search regression gate: \(.origin)",
+              "",
+              "Blocks on `\($level)`\(if $level == "warn" then " and `fail`" else "" end) rows. "
+                + "Requests sent as `\(.identity.user_agent // "unrecorded")`.",
+              "",
+              ([["fail", "warn", "unknown", "info", "pass", "n/a"][] as $s
+                | ($rows | map(select(.status == $s)) | length) as $n
+                | select($n > 0) | "\($n) \($s)"] | join(", ")),
+              "",
+              if ($open | length) == 0 then "No fail, warn, or unknown rows."
+              else
+                "| Status | Row | Check | Subject | Detail | Next step |",
+                "| --- | --- | --- | --- | --- | --- |",
+                ($open | sort_by(rank)[]
+                  | "| \(.status) | \(.id) | \(.title | cell) | \(.subject // "" | cell) | \(.detail | cell) | \(next | cell) |")
+              end
+          ' "$report" >>"$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ] || [ "$blocking" -gt 0 ]; then
+            echo "::error::The audit of $ORIGIN exited $status with $blocking row(s) at or above fail_on ($FAIL_ON); the job summary lists them."
+            exit 1
           fi
-          exit 1

@@ -34,8 +34,8 @@ jobs:
       - name: Check release matrix parity
         run: bash scripts/check-release-matrix-parity.sh
 
-  # Holds the search-presence workflow to the state and scope properties that
-  # no run in this repository exercises.
+  # Holds the search-presence gate to the permission, token, and exit
+  # properties that no run in this repository exercises.
   search-presence-contract:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
