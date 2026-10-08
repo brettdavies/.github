@@ -20,6 +20,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
+      search-presence.yml   # reusable post-deploy search regression gate for a site
       lint.yml              # internal: actionlint on push/PR
 ```
 
@@ -275,6 +276,55 @@ jobs:
     uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
 ```
 
+### `search-presence.yml`
+
+A search regression gate for a site repository, run after a deployment. It audits what the deployed site serves crawlers
+with the search-presence skill (robots.txt, sitemaps, status codes, noindex, canonicals, on-page tags, headers, and host
+redirects) and fails the job on any row at or above the config's `fail_on` level: `fail` by default, or `warn` to block
+on warnings as well. The job summary gives the count of rows per status and each blocking row with its next step. An
+audit that cannot finish fails the job too, with a line in the summary saying so.
+
+The skill reads the site's `search-presence.toml` itself: it audits the config's `origin`, leaves out its `private`
+hosts, reads its `sitemaps` when robots.txt declares none, and blocks at its `fail_on` level, so call the workflow once
+the deployment is live at that origin. The audit sends the skill's own User-Agent and only reads the site.
+
+The gate submits nothing, reads no search-engine data, and keeps no state between runs. Submission to Bing and IndexNow,
+Google index state and the Request indexing queue, trends, and the per-site issue run locally once the deployment is
+live; the search-presence skill's documentation covers that run.
+
+A newer run for the same repository and config cancels one in progress, since the newer audit describes the live site. A
+caller with several sites calls the workflow once per config.
+
+|                                 |                                                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                    |
+| **Inputs**                      | `config` (string, optional, default `search-presence.toml`), `skill_repository` (string, optional, default the skill's repository), `skill_ref` (string, optional, default `main`) |
+| **Secrets**                     | `SEARCH_PRESENCE_SKILL_TOKEN` (required; fine-grained PAT with Contents: read on the skill's repository only)                                                                      |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                   |
+
+**Caller example:**
+
+```yaml
+name: Deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: <deploy the site>
+  search-presence:
+    needs: deploy
+    uses: brettdavies/.github/.github/workflows/search-presence.yml@main
+    permissions:
+      contents: read
+    secrets:
+      SEARCH_PRESENCE_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
+```
+
 ## Ruleset templates
 
 Starting points for GitHub branch protection, committed under `.github/rulesets/`. Consumer repos copy these into their
@@ -298,6 +348,8 @@ gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/prote
 - No `secrets: inherit` — secrets are passed explicitly
 - All `${{ }}` expressions in `run:` blocks use `env:` indirection (zero direct interpolation)
 - Input validation: `crate` and `bin` are validated with `[a-zA-Z0-9_-]+` regex
+- `search-presence.yml` refuses a `config` path outside the repository and hands the skill the config by path, so no
+  config value reaches a shell
 - Tag format validation in finalize-release (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 - Per-job permission narrowing inside reusable workflows
 
