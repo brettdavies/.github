@@ -7,7 +7,7 @@
 # The audit only reads the live site, so the job holds no search-engine
 # credentials. Submission, Google index state, the Request indexing queue,
 # the trend report, and the per-site issue run on a workstation once the
-# deploy is live.
+# deployment is live.
 #
 # Caller example:
 #   jobs:

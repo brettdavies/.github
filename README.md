@@ -278,20 +278,20 @@ jobs:
 
 ### `search-presence.yml`
 
-A search regression gate for a site repository, run after a deploy. It audits what the deployed site serves crawlers
+A search regression gate for a site repository, run after a deployment. It audits what the deployed site serves crawlers
 with the search-presence skill (robots.txt, sitemaps, status codes, noindex, canonicals, on-page tags, headers, and host
 redirects), writes the rows to the job summary, and fails the job on any row at or above the config's `fail_on` level:
 `fail` by default, or `warn` to block on warnings as well. An audit that cannot finish fails the job too.
 
-The workflow reads `origin` and `fail_on` from the site's `search-presence.toml` and audits that origin, so the deploy
-must be live there when the job starts. The audit sends the skill's own User-Agent and only reads the site.
+The workflow reads `origin` and `fail_on` from the site's `search-presence.toml` and audits that origin, so call it
+once the deployment is live there. The audit sends the skill's own User-Agent and only reads the site.
 
 The gate submits nothing, reads no search-engine data, and keeps no state between runs. Submission to Bing and IndexNow,
-Google index state and the Request indexing queue, trends, and the per-site issue run locally once the deploy is live;
-the search-presence skill's documentation covers that run.
+Google index state and the Request indexing queue, trends, and the per-site issue run locally once the deployment is
+live; the search-presence skill's documentation covers that run.
 
-A newer run for the same repository and config cancels one in progress, since the newer audit describes the live site.
-A caller with several sites calls the workflow once per config.
+A newer run for the same repository and config cancels one in progress, since the newer audit describes the live site. A
+caller with several sites calls the workflow once per config.
 
 |                                 |                                                                                                                                                                                    |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
