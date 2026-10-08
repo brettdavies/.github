@@ -86,6 +86,10 @@ else
   if [ "$(yq -o=json -I=0 "$audit_select | .env | keys" "$wf")" != '["CONFIG"]' ]; then
     fail "the audit step's env must hold CONFIG and nothing else, so the audit gets no secret"
   fi
+  secret_refs=$(yq "[($audit_select), .jobs.\"$job\".env, .env] | [.. | select(tag == \"!!str\") | select(test(\"secrets[.]\"))] | length" "$wf")
+  if [ "$secret_refs" != 0 ]; then
+    fail "a secrets expression reaches the audit step (in the step itself, or in its job's or the workflow's env), so the audit gets a secret"
+  fi
 
   sandbox=$(mktemp -d)
   trap 'rm -rf "$sandbox"' EXIT
