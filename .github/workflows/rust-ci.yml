@@ -73,6 +73,31 @@ on:
         type: boolean
         required: false
         default: false
+      anc_version:
+        description: "Run the `Agent-native audit` job with this exact anc release (for example `0.6.0`). Default empty: no audit. The pin is the gate's only way to meet a new anc release, so a release that adds or rescores rows reaches the caller through a PR that bumps it."
+        type: string
+        required: false
+        default: ""
+      anc_bin:
+        description: "The binary target the audit builds in release mode and grades, with the source tree, as `anc audit . --bin <name>`. Required when `anc_version` is set."
+        type: string
+        required: false
+        default: ""
+      anc_score_floor:
+        description: "Fail the audit when the scorecard's credit-weighted `badge.score_pct` is below this. Default 0. Warnings never fail on their own, so the floor is what catches a row that slips from pass to warn."
+        type: number
+        required: false
+        default: 0
+      anc_blocking_tiers:
+        description: "Which `fail` and `error` rows fail the audit: `must` (default) counts only MUST-tier rows, `any` counts every row, including source rows that carry no tier."
+        type: string
+        required: false
+        default: "must"
+      release_size_ceiling_bytes:
+        description: "With `anc_version` set, fail when the release binary is larger than this many bytes. Default 0: no ceiling. Cargo honors [profile.release] only from the workspace root, and a profile that stops applying inflates the binary while every test stays green."
+        type: number
+        required: false
+        default: 0
 
 # The literal `rust-ci-` prefix is what keeps this group distinct from a
 # caller's own. Inside a called workflow `github.workflow` is the *caller's*
@@ -347,6 +372,115 @@ jobs:
 
       - name: Check concurrency group namespacing
         run: bash scripts/check-workflow-concurrency.sh
+
+  # The audit grades the source tree and the release binary together, so the
+  # source rows (`code-unwrap` and its kin) count beside the behavioral ones.
+  anc:
+    name: Agent-native audit
+    if: ${{ inputs.anc_version != '' && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANC_VERSION: ${{ inputs.anc_version }}
+      ANC_BIN: ${{ inputs.anc_bin }}
+      ANC_SCORE_FLOOR: ${{ inputs.anc_score_floor }}
+      ANC_BLOCKING_TIERS: ${{ inputs.anc_blocking_tiers }}
+      SIZE_CEILING_BYTES: ${{ inputs.release_size_ceiling_bytes }}
+    steps:
+      - name: Check the inputs
+        run: |
+          if [ -z "$ANC_BIN" ]; then
+            echo "::error title=anc audit::anc_version is set, so anc_bin must name the binary to audit"
+            exit 1
+          fi
+          case "$ANC_BLOCKING_TIERS" in
+            must | any) ;;
+            *)
+              echo "::error title=anc audit::anc_blocking_tiers is '${ANC_BLOCKING_TIERS}'; expected must or any"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@3be4ad2b146f3302f92e5956c54fedbb6ae8cccc # v1.25.3
+
+      # A second binstall attempt covers a transient release-asset fetch
+      # failure; a source build is the fallback after that.
+      - name: Install anc
+        run: |
+          cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
+            || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
+            || cargo install "agentnative@${ANC_VERSION}" --locked
+          installed="$(anc --version)"
+          echo "${installed} (pinned ${ANC_VERSION})"
+          if [ "$installed" != "anc ${ANC_VERSION}" ]; then
+            echo "::error title=Install anc::found '${installed}' on PATH, expected anc ${ANC_VERSION}"
+            exit 1
+          fi
+
+      - name: Build the release binary
+        run: cargo build --release --locked --bin "$ANC_BIN"
+
+      - name: Release binary size ceiling
+        if: inputs.release_size_ceiling_bytes > 0
+        run: |
+          size="$(stat -c %s "target/release/${ANC_BIN}")"
+          echo "target/release/${ANC_BIN} is ${size} bytes (ceiling ${SIZE_CEILING_BYTES})"
+          if [ "$size" -gt "$SIZE_CEILING_BYTES" ]; then
+            echo "::error title=Release binary size::${ANC_BIN} is ${size} bytes, over the ${SIZE_CEILING_BYTES}-byte ceiling; check that [profile.release] still applies from the workspace root"
+            exit 1
+          fi
+
+      # anc exits 0 when every row passes, 1 when warnings are present without
+      # failures, and 2 on failures, errors, or a usage error. The scorecard
+      # decides among the three, and its shape check rejects a usage error's
+      # output; any other exit means the audit never ran.
+      - name: anc audit
+        run: |
+          set -euo pipefail
+          status=0
+          anc audit . --bin "$ANC_BIN" --output json > anc-scorecard.json || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ] && [ "$status" -ne 2 ]; then
+            echo "::error title=anc audit::anc audit exited ${status} without a verdict"
+            exit 1
+          fi
+          jq -e '(.badge.score_pct | type == "number") and (.results | type == "array" and length > 0)' anc-scorecard.json > /dev/null
+          jq -r '.results[] | "\(.tier)\t\(.status)\t\(.id)"' anc-scorecard.json | sort > anc-rows.tsv
+          score="$(jq -r '.badge.score_pct' anc-scorecard.json)"
+          echo "anc score: ${score}% (floor ${ANC_SCORE_FLOOR}%)"
+          # `error` rows leave the score's denominator, so a harness that
+          # cannot run the binary would otherwise pass at 100.
+          blocking="$(jq -r --arg tiers "$ANC_BLOCKING_TIERS" '
+            [.results[]
+              | select(.status == "fail" or .status == "error")
+              | select($tiers == "any" or .tier == "must")
+              | "\(.id) (\(.tier // "untiered") \(.status))"]
+            | join(", ")' anc-scorecard.json)"
+          if [ -n "$blocking" ]; then
+            echo "::error title=anc audit::blocking rows: ${blocking}"
+            exit 1
+          fi
+          if ! jq -e --argjson floor "$ANC_SCORE_FLOOR" '.badge.score_pct >= $floor' anc-scorecard.json > /dev/null; then
+            echo "::error title=anc audit::score ${score}% is below the ${ANC_SCORE_FLOOR}% floor"
+            exit 1
+          fi
+
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anc-scorecard
+          path: |
+            anc-scorecard.json
+            anc-rows.tsv
 
   changelog-check:
     name: Changelog
