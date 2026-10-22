@@ -35,20 +35,35 @@ CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 | **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
 | **Required caller permissions** | `contents: read`                                                                                                                                                                                                                      |
 
+Opt-in jobs, each off by default. A job that is off reports skipped, which a ruleset counts as passing. Three of them
+run a script from the caller's checkout, because the rule it enforces belongs to the repository.
+
+| Input                                 | Job (check name under a `ci:` caller) | What it runs                                                                                                   |
+| ------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `docs` (bool)                         | `ci / Doc build`                      | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
+| `docs_rs_package` (string, with docs) | `ci / Doc build`                      | also `cargo test --doc -p <package>` and the nightly `--cfg docsrs --all-features` build docs.rs runs          |
+| `msrv` (bool)                         | `ci / MSRV`                           | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
+| `completions` (bool)                  | `ci / Completions freshness`          | `scripts/generate-completions.sh --check`                                                                      |
+| `lint_stdio` (bool)                   | `ci / Output discipline`              | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
+| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`           | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+
 **Caller example:**
 
 ```yaml
 name: CI
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
 permissions:
   contents: read
 jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      docs: true
+      msrv: true
+      completions: true
+      lint_stdio: true
+      workflow_concurrency: true
 ```
 
 ### `rust-release.yml`
@@ -60,14 +75,14 @@ changelog the `changelog` input names, the repository root's `CHANGELOG.md` by d
 With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
 CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
 publishes no crate and no release. Once the release exists, every published file is verified against its attestation,
-and the Homebrew dispatch goes out only when that passes. The signing job runs no code from the caller's repository;
-the SBOM is generated in a job of its own with a read-only token. This workflow is the signer, so a release verifies
-with `gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
+and the Homebrew dispatch goes out only when that passes. The signing job runs no code from the caller's repository; the
+SBOM is generated in a job of its own with a read-only token. This workflow is the signer, so a release verifies with
+`gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
 brettdavies/.github/.github/workflows/rust-release.yml`.
 
 A caller whose Homebrew formula installs the release's archives, rather than building the tagged source, needs
-`attest: true`. `brettdavies/homebrew-tap` verifies each archive such a formula names against its attestation, with
-this workflow as the signer, before it pins the checksum, and stops the formula bump when an archive has none.
+`attest: true`. `brettdavies/homebrew-tap` verifies each archive such a formula names against its attestation, with this
+workflow as the signer, before it pins the checksum, and stops the formula bump when an archive has none.
 
 |                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -144,9 +159,9 @@ jobs:
 
 ### `rust-lib-release.yml`
 
-Release pipeline for a library crate in a workspace: version check against the crate's own `Cargo.toml`, audit, `cargo
-publish -p <crate>` (Trusted Publishing OIDC), GitHub Release (notes extracted from the changelog beside the crate,
-`make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
+Release pipeline for a library crate in a workspace: version check against the crate's own `Cargo.toml`, audit,
+`cargo publish -p <crate>` (Trusted Publishing OIDC), GitHub Release (notes extracted from the changelog beside the
+crate, `make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
 
 |                                 |                                                                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
