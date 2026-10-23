@@ -16,6 +16,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
   .github/                  # GitHub's special directory
     workflows/
       rust-ci.yml           # reusable CI workflow
+      rust-change-scope.yml # reusable docs-only classifier feeding rust-ci.yml's docs_only
       rust-release.yml      # reusable release workflow (binary crate)
       rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
@@ -70,6 +71,36 @@ jobs:
       completions: true
       lint_stdio: true
       workflow_concurrency: true
+```
+
+### `rust-change-scope.yml`
+
+Answers whether a pull request can reach cargo, so a caller can pass `docs_only` to `rust-ci.yml` and skip the Rust
+battery for a change that edits only documentation no Rust source reads. The rule lives in the caller's script, which
+reads changed paths on stdin and prints the cargo inputs among them; empty output means documentation only. On any event
+other than `pull_request` the answer is `rust=true`, and a caller keyed on `rust == 'false'` runs the full battery when
+this job fails.
+
+|                                 |                                                                       |
+| ------------------------------- | --------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                       |
+| **Inputs**                      | `script` (string, optional, default `scripts/cargo-inputs.sh`)        |
+| **Outputs**                     | `rust`: `false` when every changed path is documentation, else `true` |
+| **Check name**                  | `<caller job key> / Change scope`                                     |
+| **Required caller permissions** | `contents: read`                                                      |
+
+**Caller example:**
+
+```yaml
+jobs:
+  scope:
+    uses: brettdavies/.github/.github/workflows/rust-change-scope.yml@main
+  ci:
+    needs: scope
+    if: ${{ !cancelled() }}
+    uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      docs_only: ${{ needs.scope.outputs.rust == 'false' }}
 ```
 
 ### `rust-release.yml`

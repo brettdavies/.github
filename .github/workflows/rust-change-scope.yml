@@ -1,0 +1,89 @@
+# Reusable change-scope classifier for brettdavies Rust repos.
+#
+# Answers whether a pull request can reach cargo at all, so the caller can pass
+# `docs_only` to rust-ci.yml and skip the Rust battery for a change that edits
+# only documentation no Rust source reads. The rule for which paths count
+# lives in the caller's own script (scripts/cargo-inputs.sh by default): it
+# reads changed paths on stdin, one per line, and prints the ones that are
+# cargo inputs, so empty output means documentation only.
+#
+# The answer fails open. On any event other than pull_request it is
+# `rust=true`, and a caller that keys `docs_only` on
+# `needs.scope.outputs.rust == 'false'` runs the full battery when this job
+# fails or never reports.
+#
+# Caller example:
+#   jobs:
+#     scope:
+#       uses: brettdavies/.github/.github/workflows/rust-change-scope.yml@main
+#     ci:
+#       needs: scope
+#       if: ${{ !cancelled() }}
+#       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+#       with:
+#         docs_only: ${{ needs.scope.outputs.rust == 'false' }}
+#
+# Required caller permissions: contents: read
+name: Rust change scope
+
+on:
+  workflow_call:
+    inputs:
+      script:
+        description: "The caller's classifier, relative to its checkout: reads changed paths on stdin and prints the cargo inputs among them. Default scripts/cargo-inputs.sh."
+        type: string
+        required: false
+        default: scripts/cargo-inputs.sh
+    outputs:
+      rust:
+        description: "`false` when every changed path is documentation only, `true` otherwise."
+        value: ${{ jobs.scope.outputs.rust }}
+
+# A literal token leads the group key: inside a called workflow
+# `github.workflow` is the caller's name, so a key built only from context is
+# one the caller also produces, and this workflow's queue would cancel the run
+# that called it.
+concurrency:
+  group: rust-change-scope-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  scope:
+    name: Change scope
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+    steps:
+      # The checkout is GitHub's test merge of the PR into its base, so the
+      # diff against its first parent is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Classify the changed paths
+        id: scope
+        env:
+          SCRIPT: ${{ inputs.script }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Change scope::${EVENT} is not a pull request, so every Rust job runs"
+            exit 0
+          fi
+          inputs="$(git diff --no-renames --name-only HEAD^1 HEAD | bash "$SCRIPT")"
+          if [ -n "$inputs" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            printf 'Paths that reach cargo:\n%s\n' "$inputs"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Change scope::every changed path is documentation no Rust source reads, so the Rust jobs skip"
+          fi
