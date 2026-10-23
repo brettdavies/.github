@@ -1,8 +1,8 @@
 # Releases rationale
 
 Companion to [`RELEASES.md`](./RELEASES.md). `RELEASES.md` is the runbook (commands, paths, decision tables). This file
-holds the WHY behind those rules: branching model, PR conventions, prose-scrubbing
-scope, self-applied reusable workflows, branch protection, and ref-pinning policy.
+holds the WHY behind those rules: branching model, PR conventions, prose-scrubbing scope, self-applied reusable
+workflows, branch protection, and ref-pinning policy.
 
 Read this when:
 
@@ -16,13 +16,12 @@ Read this when:
 
 Feature branches cut from `main` and merge back via squash PRs. Consumers pin `@main`, so `main` is production, and a
 merged PR is immediately live fleet-wide. A separate integration branch adds a promotion hop between "reviewed and
-merged" and "available to consumers"; for a repo whose entire product is the ref consumers resolve at run time, that
-hop is pure latency and a staleness foot-gun (fixes sit merged-but-unshipped while every consumer keeps running without
+merged" and "available to consumers"; for a repo whose entire product is the ref consumers resolve at run time, that hop
+is pure latency and a staleness foot-gun (fixes sit merged-but-unshipped while every consumer keeps running without
 them). The PR gate (lint, docs guard, review) provides the verification; the promotion ceremony provided none.
 
-`dev` is retired, not deleted: it archives the historical engineering docs (`docs/plans/` and friends) that never ship
-to `main`, pending review. Its ruleset stays applied so the archive cannot be deleted or rewritten. New planning docs
-live in the solutions repo or in local-only checkouts.
+There is no `dev` branch. Planning docs live in the solutions repo or in local-only checkouts, and what a plan settles
+reaches `main` as the workflows, their comments, and these runbooks.
 
 Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
 `docs/reviews/`, `docs/solutions/`) stay off `main`. The `self-guard-main-docs.yml` workflow (this repo's self-applied
@@ -44,8 +43,8 @@ documented in [`README.md`](README.md#ref-pinning)), reintroduce the tag step an
 ### No explainer prose in the body
 
 Every section of a PR body is user-facing substance only: what is changing for the consumer that was not already there —
-the **net diff**, not the commit history or intermediate state that produced it. Workflow mechanics and CI behavior
-are documented in this file, in `RELEASES.md`, and in `.github/`, NOT in the PR body. Leak-check narration
+the **net diff**, not the commit history or intermediate state that produced it. Workflow mechanics and CI behavior are
+documented in this file, in `RELEASES.md`, and in `.github/`, NOT in the PR body. Leak-check narration
 ("`guard-main-docs` runs clean", "no guarded paths leaked"), CI check status, exclusion rationale, and other
 verification artifacts stay local; anomalies get fixed before push, not audit-trailed in the body.
 
@@ -56,8 +55,8 @@ perspective; they belong in this file, the script outputs, and the commit histor
 
 Two release-flow artifacts live outside any automated prose check and need a manual scrub before they ship:
 
-- **PR bodies on PRs to `main`.** `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check
-  sees it.
+- **PR bodies on PRs to `main`.** `gh pr create` and `gh pr edit` send body text directly to GitHub; no local check sees
+  it.
 - **Workflow `description:` strings, comments, and any inline prose inside `.github/workflows/*.yml`.** YAML files are
   not covered by the same markdown-targeted prose checks, but the strings users see in the GitHub Actions UI come from
   here.
@@ -76,15 +75,16 @@ paths so the body keeps its authored shape and no soft-wrapping is injected.
 Some of the reusable workflows this repo ships have a thin self-applied caller. When a self-applied caller exists, a PR
 to this repo exercises the PR's version of the reusable (via a `./...` local-path reference) rather than the
 merged-to-`main` version, catching regressions on the PR that introduces them rather than after the workflow has shipped
-to consumer repos. Currently only `guard-main-docs.yml` is wired this way (via `self-guard-main-docs.yml`); the
-`guard-main-provenance.yml` and `guard-release-branch.yml` reusables are shipped but not self-applied here.
+to consumer repos. `guard-main-docs.yml` (via `self-guard-main-docs.yml`), `lint-basics.yml` (via `lint.yml`), and
+`dependabot-preflight.yml` (via `self-dependabot-preflight.yml`) are wired this way; the `guard-main-provenance.yml` and
+`guard-release-branch.yml` reusables are shipped but not self-applied here.
 
 The self-applied caller filename always differs from the reusable to avoid a self-collision. Pattern for any future
 guard reusable: add a thin self-applied caller (different filename, `./...` path reference, job-key matching the
-standard convention so the status-check name is stable). The Rust-oriented reusables (`rust-ci.yml`, `rust-release.yml`,
-`rust-finalize-release.yml`) are not self-applied because this repo is not a Rust crate. Nor is `search-presence.yml`,
-which needs a deployed site and a token for the skill's repository; `scripts/check-search-presence-workflow.sh` holds
-its permission, token, and exit properties in the lint run instead.
+standard convention so the status-check name is stable). The `rust-*.yml` reusables are not self-applied because this
+repo is not a Rust crate, so a change to one is tested from a consumer's draft pull request that calls the change's
+branch. Nor is `search-presence.yml`, which needs a deployed site and a token for the skill's repository;
+`scripts/check-search-presence-workflow.sh` holds its permission, token, and exit properties in the lint run instead.
 
 ## Branch protection
 
@@ -103,9 +103,9 @@ that will never appear. Confirm the real contexts after a first CI run with:
 gh api repos/brettdavies/.github/commits/<sha>/check-runs --jq '.check_runs[].name'
 ```
 
-For this repo, the relevant published contexts include `actionlint` (from `lint.yml`) and `guard-docs /
-check-forbidden-docs` (from `self-guard-main-docs.yml`). Add new ones to `protect-main.json` whenever a new self-applied
-workflow ships.
+For this repo, the relevant published contexts include `actionlint` (from `lint.yml`) and
+`guard-docs / check-forbidden-docs` (from `self-guard-main-docs.yml`). Add new ones to `protect-main.json` whenever a
+new self-applied workflow ships.
 
 ## Consumer adoption and ref pinning
 

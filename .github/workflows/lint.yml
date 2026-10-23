@@ -1,10 +1,10 @@
 name: Lint workflows
 
-# pull_request only: merges to main/dev are squash merges, so a push run
-# would re-lint the tree already linted at the PR head.
+# pull_request only: merges to main are squash merges, so a push run would
+# re-lint the tree already linted at the PR head.
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main]
 
 concurrency:
   group: lint-${{ github.ref }}

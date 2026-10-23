@@ -16,11 +16,10 @@ Direct commits to `main` are not permitted: every change has a PR number in its 
 
 ## Branches
 
-| Branch                                 | Role                                                                                                                    | Lifetime                               | Protection                                                |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------- |
-| `main`                                 | Production. Consumer repos pin here.                                                                                    | Forever.                               | `.github/rulesets/protect-main.json`                      |
-| `dev`                                  | Retired archive. Holds the historical engineering docs (`docs/plans/` and friends) pending review; receives no new PRs. | Forever. Never delete.                 | `.github/rulesets/protect-dev.json` (freezes the archive) |
-| `feat/*`, `fix/*`, `chore/*`, `docs/*` | Feature work.                                                                                                           | One PR's worth. Auto-deleted on merge. | None. Squash into `main` via PR.                          |
+| Branch                                 | Role                                 | Lifetime                               | Protection                           |
+| -------------------------------------- | ------------------------------------ | -------------------------------------- | ------------------------------------ |
+| `main`                                 | Production. Consumer repos pin here. | Forever.                               | `.github/rulesets/protect-main.json` |
+| `feat/*`, `fix/*`, `chore/*`, `docs/*` | Feature work.                        | One PR's worth. Auto-deleted on merge. | None. Squash into `main` via PR.     |
 
 → Rationale: [`RELEASES-RATIONALE.md` § Branching model](./RELEASES-RATIONALE.md#branching-model).
 
@@ -64,8 +63,7 @@ run. There is no promotion hop, no `release/*` branch, no cherry-pick, and no `v
 
 Engineering docs (`docs/architecture/`, `docs/brainstorms/`, `docs/ideation/`, `docs/plans/`, `docs/research/`,
 `docs/reviews/`, `docs/solutions/`) stay off `main`: `self-guard-main-docs.yml` blocks any file added, modified,
-renamed, or copied under those paths. New planning docs live in the solutions repo or local-only checkouts; the
-historical ones sit on the retired `dev` branch.
+renamed, or copied under those paths. Planning docs live in the solutions repo or local-only checkouts.
 
 ## Prose scrubbing
 
@@ -110,30 +108,31 @@ checks, then paste the cleaned text back into the YAML file.
 | `lint.yml`                 | `./.github/workflows/lint-basics.yml`     | Repo-internal PR gate; the local path exercises the PR head's version of the reusable.                                                                                    |
 
 When adding a new reusable workflow, also add a thin self-applied caller (different filename, `./...` path reference,
-job-key matching the standard convention so the status-check name is stable).
+job-key matching the standard convention so the status-check name is stable), unless this repo cannot run it: the
+`rust-*.yml` reusables need a Rust crate, and `search-presence.yml` needs a deployed site.
+[`RELEASES-RATIONALE.md` § Self-applied reusable workflows](./RELEASES-RATIONALE.md#self-applied-reusable-workflows)
+says what checks those instead.
 
 → Rationale (why self-apply, where this catches regressions):
 [`RELEASES-RATIONALE.md` § Self-applied reusable workflows](./RELEASES-RATIONALE.md#self-applied-reusable-workflows).
 
 ## Branch protection
 
-Two rulesets are committed under `.github/rulesets/` and applied to the repo via the GitHub API:
-
-- **`protect-main.json`**: required signatures, linear history, squash-only merges via PR, required status checks,
-  creation/deletion blocked, non-fast-forward blocked.
-- **`protect-dev.json`**: required signatures, deletion blocked, non-fast-forward blocked. It now freezes the retired
-  `dev` archive against accidental deletion or rewrites.
+`.github/rulesets/protect-main.json` is applied to the repo via the GitHub API: required signatures, linear history,
+squash-only merges via PR, required status checks, creation/deletion blocked, non-fast-forward blocked.
 
 ```bash
-gh api -X POST repos/brettdavies/.github/rulesets --input .github/rulesets/protect-dev.json
-gh api -X PUT  repos/brettdavies/.github/rulesets/<id> --input .github/rulesets/protect-main.json
+gh api -X PUT repos/brettdavies/.github/rulesets/<id> --input .github/rulesets/protect-main.json
 ```
+
+`.github/rulesets/protect-dev.json` sits beside it as a template for consumer repositories that keep a `dev` branch.
+This repo has no `dev` branch, so it is not applied here.
 
 ### Status-check contexts
 
-For this repo, the relevant published contexts include `actionlint` (from `lint.yml`) and `guard-docs /
-check-forbidden-docs` (from `self-guard-main-docs.yml`). Add new ones to `protect-main.json` whenever a new self-applied
-workflow ships.
+For this repo, the relevant published contexts include `actionlint` (from `lint.yml`) and
+`guard-docs / check-forbidden-docs` (from `self-guard-main-docs.yml`). Add new ones to `protect-main.json` whenever a
+new self-applied workflow ships.
 
 → Rationale (inline vs reusable context-string pitfall):
 [`RELEASES-RATIONALE.md` § Branch protection](./RELEASES-RATIONALE.md#branch-protection).
