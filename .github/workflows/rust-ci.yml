@@ -132,6 +132,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -155,6 +157,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       # `cargo check` still runs build scripts, so a C library in the tree is
       # compiled here. choco rather than a marketplace action: the shared
@@ -207,6 +211,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       # `--workspace` packages every member together and verifies them against
       # each other, which is the only way to dry-run a member whose path
@@ -255,6 +261,16 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
+      - name: Validate the docs.rs package name
+        if: inputs.docs_rs_package != ''
+        env:
+          PACKAGE: ${{ inputs.docs_rs_package }}
+        run: |
+          if [[ ! "$PACKAGE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error title=Doc build::docs_rs_package '${PACKAGE}' is not a package name; expected letters, digits, _ and -"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
@@ -268,6 +284,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: cargo doc
         env:
@@ -320,6 +338,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: msrv-${{ steps.msrv.outputs.version }}
+          cache-on-failure: true
 
       # A compile check, not a lint pass: an older compiler can warn where
       # the pinned one does not, and the clippy job already denies warnings.
@@ -342,6 +361,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Verify completions match the CLI definition
         run: bash scripts/generate-completions.sh --check
