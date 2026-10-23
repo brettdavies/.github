@@ -36,20 +36,41 @@ CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 | **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
 | **Required caller permissions** | `contents: read`                                                                                                                                                                                                                      |
 
+Opt-in jobs, each off by default. A job that is off reports skipped, which a ruleset counts as passing. Three of them
+run a script from the caller's checkout, because the rule it enforces belongs to the repository.
+
+| Input                                 | Job (check name under a `ci:` caller) | What it runs                                                                                                   |
+| ------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `docs` (bool)                         | `ci / Doc build`                      | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
+| `docs_rs_package` (string, with docs) | `ci / Doc build`                      | also `cargo test --doc -p <package>` and the nightly `--cfg docsrs --all-features` build docs.rs runs          |
+| `msrv` (bool)                         | `ci / MSRV`                           | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
+| `completions` (bool)                  | `ci / Completions freshness`          | `scripts/generate-completions.sh --check`                                                                      |
+| `lint_stdio` (bool)                   | `ci / Output discipline`              | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
+| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`           | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+| `anc_version` (string)                | `ci / Agent-native audit`             | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
+
+The audit's other inputs: `anc_bin` (string, required with `anc_version`), `anc_score_floor` (number, default `0`; fails
+below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any` to fail on every `fail` or `error`
+row), and `release_size_ceiling_bytes` (number, default `0` for no ceiling). The scorecard uploads as the
+`anc-scorecard` artifact on every run.
+
 **Caller example:**
 
 ```yaml
 name: CI
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
 permissions:
   contents: read
 jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      docs: true
+      msrv: true
+      completions: true
+      lint_stdio: true
+      workflow_concurrency: true
 ```
 
 ### `rust-change-scope.yml`
