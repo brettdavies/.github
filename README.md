@@ -46,6 +46,12 @@ run a script from the caller's checkout, because the rule it enforces belongs to
 | `completions` (bool)                  | `ci / Completions freshness`          | `scripts/generate-completions.sh --check`                                                                      |
 | `lint_stdio` (bool)                   | `ci / Output discipline`              | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
 | `workflow_concurrency` (bool)         | `ci / Workflow concurrency`           | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+| `anc_version` (string)                | `ci / Agent-native audit`             | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
+
+The audit's other inputs: `anc_bin` (string, required with `anc_version`), `anc_score_floor` (number, default `0`; fails
+below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any` to fail on every `fail` or `error`
+row), and `release_size_ceiling_bytes` (number, default `0` for no ceiling). The scorecard uploads as the
+`anc-scorecard` artifact on every run.
 
 **Caller example:**
 
