@@ -17,6 +17,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
     workflows/
       rust-ci.yml           # reusable CI workflow
       rust-change-scope.yml # reusable docs-only classifier feeding rust-ci.yml's docs_only
+      rust-changelog-bump.yml  # reusable surface-growth check against the PR's changelog block
       rust-release.yml      # reusable release workflow (binary crate)
       rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
@@ -101,6 +102,41 @@ jobs:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
     with:
       docs_only: ${{ needs.scope.outputs.rust == 'false' }}
+```
+
+### `rust-changelog-bump.yml`
+
+Fails a pull request whose CLI surface grows while its `## Changelog` block names no minor-or-higher section, so an
+addition cannot ship as a patch by being filed under `### Changed`. The caller's script decides what the surface is and
+how the block is read; it is called as `<script> check <base-tree> <head-tree> <pr-body-file>` and exits 0 (pass), 1
+(grew without the section), or 2 (unreadable tree). The base tree holds only `surface_paths`, taken from the PR's base.
+
+|                                 |                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Trigger**                     | `workflow_call`                                                                                                    |
+| **Inputs**                      | `script` (string, default `scripts/check-surface-bump.sh`), `surface_paths` (string, default `completions schema`) |
+| **Check name**                  | `<caller job key> / Surface growth needs a minor section`                                                          |
+| **Required caller permissions** | `contents: read`                                                                                                   |
+
+The verdict depends on the PR body, so the caller triggers on `edited` as well and owns the concurrency group. PRs to
+`main` are release PRs and stay out.
+
+**Caller example:**
+
+```yaml
+name: Changelog bump
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches-ignore: [main]
+permissions:
+  contents: read
+concurrency:
+  group: changelog-bump-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  changelog-bump:
+    uses: brettdavies/.github/.github/workflows/rust-changelog-bump.yml@main
 ```
 
 ### `rust-release.yml`

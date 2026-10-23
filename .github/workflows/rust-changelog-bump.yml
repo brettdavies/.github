@@ -1,0 +1,82 @@
+# Reusable changelog bump check for brettdavies Rust CLI tools.
+#
+# Fails a pull request whose CLI surface grows while its `## Changelog` block
+# names no minor-or-higher section. The caller's script owns what "surface"
+# means and how the changelog block is found: it is called as
+#   <script> check <base-tree> <head-tree> <pr-body-file>
+# and exits 0 to pass, 1 when the surface grew without the section, and 2 on a
+# tree it cannot read. The base tree holds only `surface_paths`, extracted from
+# the PR's base.
+#
+# The verdict depends on the PR body, so the caller triggers on `edited` too
+# and owns the concurrency group. PRs to main are release PRs, whose diff spans
+# a whole release, so a caller leaves main out.
+#
+# Caller example (.github/workflows/changelog-bump.yml):
+#   on:
+#     pull_request:
+#       types: [opened, edited, synchronize, reopened]
+#       branches-ignore: [main]
+#   permissions:
+#     contents: read
+#   concurrency:
+#     group: changelog-bump-${{ github.ref }}
+#     cancel-in-progress: true
+#   jobs:
+#     changelog-bump:
+#       uses: brettdavies/.github/.github/workflows/rust-changelog-bump.yml@main
+#
+# Required caller permissions: contents: read
+name: Rust changelog bump
+
+on:
+  workflow_call:
+    inputs:
+      script:
+        description: "The caller's surface check, relative to its checkout. Default scripts/check-surface-bump.sh."
+        type: string
+        required: false
+        default: scripts/check-surface-bump.sh
+      surface_paths:
+        description: "Space-separated paths the script compares, extracted from the base tree. Default `completions schema`."
+        type: string
+        required: false
+        default: completions schema
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  surface:
+    name: Surface growth needs a minor section
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      # The checkout is GitHub's test merge of the PR into its base, so its
+      # first parent is the base tree the PR is measured against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Extract the base tree's surface files
+        env:
+          SURFACE_PATHS: ${{ inputs.surface_paths }}
+        run: |
+          set -euo pipefail
+          read -ra paths <<< "$SURFACE_PATHS"
+          mkdir -p "$RUNNER_TEMP/base"
+          git archive HEAD^1 "${paths[@]}" | tar -x -C "$RUNNER_TEMP/base"
+
+      # The body reaches the script through the environment and a file, never
+      # through expression interpolation into the shell.
+      - name: Compare the surface against the changelog section
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          SCRIPT: ${{ inputs.script }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          bash "$SCRIPT" check "$RUNNER_TEMP/base" . "$RUNNER_TEMP/pr-body.md"
