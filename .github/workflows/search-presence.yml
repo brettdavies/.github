@@ -1,0 +1,132 @@
+# Reusable post-deploy search regression gate for a site repository. Runs the
+# search-presence skill's audit of what the deployed site serves crawlers, with
+# the site's search-presence.toml as its config, writes the audit's summary to
+# the job summary, and fails the job on rows at or above the config's fail_on
+# level, or when the audit cannot finish.
+#
+# The audit only reads the live site, so the job holds no search-engine
+# credentials. Submission, Google index state, the Request indexing queue,
+# the trend report, and the per-site issue run on a workstation once the
+# deployment is live.
+#
+# Caller example:
+#   jobs:
+#     search-presence:
+#       needs: deploy
+#       uses: brettdavies/.github/.github/workflows/search-presence.yml@main
+#       permissions:
+#         contents: read
+#       secrets:
+#         SEARCH_PRESENCE_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
+#
+# Required caller permissions: contents: read
+name: Search Presence
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: "Path of the site's search-presence.toml, relative to the repository root"
+        type: string
+        required: false
+        default: search-presence.toml
+      skill_repository:
+        description: "The repository that holds the search-presence skill"
+        type: string
+        required: false
+        default: brettdavies/agent-skills
+      skill_ref:
+        description: "The branch, tag, or commit of the skill to run"
+        type: string
+        required: false
+        default: main
+    secrets:
+      SEARCH_PRESENCE_SKILL_TOKEN:
+        description: "Fine-grained PAT with Contents: read on the skill's repository only"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    # On the job rather than the workflow, keyed on the config: a caller may
+    # call this once per site in one run, and a workflow-level group would put
+    # those calls in one group. The audit only reads the live site, so a newer
+    # run for the same config supersedes an older one and cancelling it loses
+    # nothing.
+    concurrency:
+      group: search-presence-${{ github.repository }}-${{ inputs.config }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      SKILL_DIR: ${{ github.workspace }}/skill/search-presence
+    steps:
+      - name: Check the inputs and the skill token
+        env:
+          CONFIG: ${{ inputs.config }}
+          HAS_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN != '' }}
+        run: |
+          if [ "$HAS_SKILL_TOKEN" != true ]; then
+            echo "::error::SEARCH_PRESENCE_SKILL_TOKEN is empty. Create it in the calling repository and pass it under secrets:."
+            exit 1
+          fi
+          case "$CONFIG" in
+            '' | /* | .. | ../* | */.. | */../*)
+              echo "::error::config must be a path inside the repository, without '..': $CONFIG"
+              exit 1
+              ;;
+          esac
+
+      - name: Check out the site
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: site
+          persist-credentials: false
+
+      - name: Check out the skill
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.skill_repository }}
+          ref: ${{ inputs.skill_ref }}
+          token: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
+          path: skill
+          sparse-checkout: search-presence
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # This version's checksum ships inside the pinned setup-uv, so the
+          # download is verified against a hash the pin fixes rather than one
+          # fetched at run time.
+          version: "0.12.17"
+          enable-cache: false
+
+      - name: Audit the deployed site
+        working-directory: site
+        env:
+          CONFIG: ${{ inputs.config }}
+        run: |
+          status=0
+          uv run --script "$SKILL_DIR/scripts/audit_indexability.py" --config "$CONFIG" --format summary \
+            >>"$GITHUB_STEP_SUMMARY" || status=$?
+          case "$status" in
+            0) ;;
+            1)
+              echo "::error::The audit found rows at or above the config's fail_on level; the job summary lists them."
+              exit 1
+              ;;
+            *)
+              echo "The audit of $CONFIG did not finish (exit $status); the job log has its error." >>"$GITHUB_STEP_SUMMARY"
+              echo "::error::audit_indexability.py exited $status without a report."
+              exit 1
+              ;;
+          esac
