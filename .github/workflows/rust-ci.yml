@@ -330,12 +330,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install nightly Rust for the docs.rs build
-        if: inputs.docs_rs_package != ''
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: nightly
-
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -351,6 +345,16 @@ jobs:
         env:
           PACKAGE: ${{ inputs.docs_rs_package }}
         run: cargo test --doc -p "$PACKAGE" --locked
+
+      # After the cache step and the stable steps: rust-cache hashes every
+      # installed toolchain into its key, so a nightly installed earlier would
+      # change the key with each nightly release, and the action makes nightly
+      # the default toolchain for every step after it.
+      - name: Install nightly Rust for the docs.rs build
+        if: inputs.docs_rs_package != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
 
       # Only nightly accepts the `doc_cfg` feature a library enables under
       # `--cfg docsrs`, which is what docs.rs builds with. RUSTFLAGS is cleared
