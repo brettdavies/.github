@@ -1,10 +1,20 @@
 # Reusable CI workflow for brettdavies Rust CLI tools.
-# Runs formatting, linting, tests, security audit, and package check.
+# Runs formatting, linting, tests, security audit, and package check. A doc
+# build, an MSRV check, completions freshness, output discipline, and workflow
+# concurrency run when the caller turns each on; the last three run scripts
+# from the caller's checkout, because the rule each enforces is the
+# repository's own.
 #
 # Caller example:
 #   jobs:
 #     ci:
 #       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+#       with:
+#         docs: true
+#         msrv: true
+#         completions: true          # scripts/generate-completions.sh --check
+#         lint_stdio: true           # scripts/lint-stdio.sh
+#         workflow_concurrency: true # scripts/check-workflow-concurrency.sh
 #
 # Required caller permissions: contents: read, pull-requests: read
 #
@@ -33,6 +43,61 @@ on:
         type: boolean
         required: false
         default: false
+      docs:
+        description: "Run the `Doc build` job: `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, so a broken intra-doc link or code fence fails the PR instead of the docs.rs build after publish. Default false."
+        type: boolean
+        required: false
+        default: false
+      docs_rs_package:
+        description: "With `docs: true`, also build this one package as docs.rs does (nightly, `--cfg docsrs`, `--all-features`, warnings denied) and run its doctests, so a README that is the crate doc is compiled. Default empty: no docs.rs build."
+        type: string
+        required: false
+        default: ""
+      msrv:
+        description: "Run the `MSRV` job: `cargo +<rust-version> check --workspace --all-features --locked` on the `rust-version` the root Cargo.toml declares. Every other job compiles on the rust-toolchain.toml pin, which is usually newer, so this is the only job that sees a change that breaks a consumer still on the declared version. Default false."
+        type: boolean
+        required: false
+        default: false
+      completions:
+        description: "Run the `Completions freshness` job: `scripts/generate-completions.sh --check` from the caller's checkout, which fails when completions/ no longer matches the clap definition. Default false."
+        type: boolean
+        required: false
+        default: false
+      lint_stdio:
+        description: "Run the `Output discipline` job: `scripts/lint-stdio.sh` from the caller's checkout, with ripgrep installed. The script holds the repository's own rule for where output may be written. Default false."
+        type: boolean
+        required: false
+        default: false
+      workflow_concurrency:
+        description: "Run the `Workflow concurrency` job: `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup, which fails a concurrency group that leads with an expression rather than a literal token. Default false."
+        type: boolean
+        required: false
+        default: false
+      anc_version:
+        description: "Run the `Agent-native audit` job with this exact anc release (for example `0.6.0`). Default empty: no audit. The pin is the gate's only way to meet a new anc release, so a release that adds or rescores rows reaches the caller through a PR that bumps it."
+        type: string
+        required: false
+        default: ""
+      anc_bin:
+        description: "The binary target the audit builds in release mode and grades, with the source tree, as `anc audit . --bin <name>`. Required when `anc_version` is set."
+        type: string
+        required: false
+        default: ""
+      anc_score_floor:
+        description: "Fail the audit when the scorecard's credit-weighted `badge.score_pct` is below this. Default 0. Warnings never fail on their own, so the floor is what catches a row that slips from pass to warn."
+        type: number
+        required: false
+        default: 0
+      anc_blocking_tiers:
+        description: "Which `fail` and `error` rows fail the audit: `must` (default) counts only MUST-tier rows, `any` counts every row, including source rows that carry no tier."
+        type: string
+        required: false
+        default: "must"
+      release_size_ceiling_bytes:
+        description: "With `anc_version` set, fail when the release binary is larger than this many bytes. Default 0: no ceiling. Cargo honors [profile.release] only from the workspace root, and a profile that stops applying inflates the binary while every test stays green."
+        type: number
+        required: false
+        default: 0
 
 # The literal `rust-ci-` prefix is what keeps this group distinct from a
 # caller's own. Inside a called workflow `github.workflow` is the *caller's*
@@ -67,6 +132,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -90,6 +157,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       # `cargo check` still runs build scripts, so a C library in the tree is
       # compiled here. choco rather than a marketplace action: the shared
@@ -142,6 +211,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
 
       # `--workspace` packages every member together and verifies them against
       # each other, which is the only way to dry-run a member whose path
@@ -180,6 +251,267 @@ jobs:
           printf 'Linting %d file(s):\n' "${#shell_files[@]}"
           printf '  %s\n' "${shell_files[@]}"
           shellcheck --severity=warning "${shell_files[@]}"
+
+  # Each job from here to `changelog-check` runs only when its caller turns it
+  # on. One that is off reports skipped, which a ruleset counts as passing, so
+  # a consumer that sets none of these inputs keeps the verdicts it has.
+  docs:
+    name: Doc build
+    if: ${{ inputs.docs && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Validate the docs.rs package name
+        if: inputs.docs_rs_package != ''
+        env:
+          PACKAGE: ${{ inputs.docs_rs_package }}
+        run: |
+          if [[ ! "$PACKAGE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error title=Doc build::docs_rs_package '${PACKAGE}' is not a package name; expected letters, digits, _ and -"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly Rust for the docs.rs build
+        if: inputs.docs_rs_package != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
+      - name: Doctests
+        if: inputs.docs_rs_package != ''
+        env:
+          PACKAGE: ${{ inputs.docs_rs_package }}
+        run: cargo test --doc -p "$PACKAGE" --locked
+
+      # Only nightly accepts the `doc_cfg` feature a library enables under
+      # `--cfg docsrs`, which is what docs.rs builds with. RUSTFLAGS is cleared
+      # because the workflow's `-Dwarnings` would turn a lint nightly adds
+      # before stable into a failure no stable job reproduces; rustdoc's own
+      # warnings are still denied.
+      - name: cargo doc as docs.rs builds it
+        if: inputs.docs_rs_package != ''
+        env:
+          PACKAGE: ${{ inputs.docs_rs_package }}
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
+          RUSTFLAGS: ""
+        run: cargo +nightly doc -p "$PACKAGE" --no-deps --all-features --locked
+
+  msrv:
+    name: MSRV
+    if: ${{ inputs.msrv && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install the declared rust-version
+        id: msrv
+        run: |
+          set -euo pipefail
+          msrv="$(awk -F\" '/^rust-version *= *"/ {print $2; exit}' Cargo.toml)"
+          if [ -z "$msrv" ]; then
+            echo "::error title=MSRV::the root Cargo.toml declares no rust-version"
+            exit 1
+          fi
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          echo "version=$msrv" >> "$GITHUB_OUTPUT"
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+          cache-on-failure: true
+
+      # A compile check, not a lint pass: an older compiler can warn where
+      # the pinned one does not, and the clippy job already denies warnings.
+      - name: cargo check on the declared rust-version
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+          RUSTFLAGS: ""
+        run: cargo "+${MSRV}" check --workspace --all-features --locked
+
+  completions:
+    name: Completions freshness
+    if: ${{ inputs.completions && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Verify completions match the CLI definition
+        run: bash scripts/generate-completions.sh --check
+
+  lint-stdio:
+    name: Output discipline
+    if: ${{ inputs.lint_stdio && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Run scripts/lint-stdio.sh
+        run: bash scripts/lint-stdio.sh
+
+  workflow-concurrency:
+    name: Workflow concurrency
+    if: ${{ inputs.workflow_concurrency && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check concurrency group namespacing
+        run: bash scripts/check-workflow-concurrency.sh
+
+  # The audit grades the source tree and the release binary together, so the
+  # source rows (`code-unwrap` and its kin) count beside the behavioral ones.
+  anc:
+    name: Agent-native audit
+    if: ${{ inputs.anc_version != '' && !inputs.docs_only }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ANC_VERSION: ${{ inputs.anc_version }}
+      ANC_BIN: ${{ inputs.anc_bin }}
+      ANC_SCORE_FLOOR: ${{ inputs.anc_score_floor }}
+      ANC_BLOCKING_TIERS: ${{ inputs.anc_blocking_tiers }}
+      SIZE_CEILING_BYTES: ${{ inputs.release_size_ceiling_bytes }}
+    steps:
+      - name: Check the inputs
+        run: |
+          if [ -z "$ANC_BIN" ]; then
+            echo "::error title=anc audit::anc_version is set, so anc_bin must name the binary to audit"
+            exit 1
+          fi
+          if [[ ! "$ANC_BIN" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error title=anc audit::anc_bin '${ANC_BIN}' is not a binary name; expected letters, digits, _ and -"
+            exit 1
+          fi
+          if [[ ! "$ANC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error title=anc audit::anc_version '${ANC_VERSION}' is not an exact release; expected a version such as 0.6.0"
+            exit 1
+          fi
+          case "$ANC_BLOCKING_TIERS" in
+            must | any) ;;
+            *)
+              echo "::error title=anc audit::anc_blocking_tiers is '${ANC_BLOCKING_TIERS}'; expected must or any"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@3be4ad2b146f3302f92e5956c54fedbb6ae8cccc # v1.25.3
+
+      # A second binstall attempt covers a transient release-asset fetch
+      # failure; a source build is the fallback after that.
+      - name: Install anc
+        run: |
+          cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
+            || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
+            || cargo install "agentnative@${ANC_VERSION}" --locked
+          installed="$(anc --version)"
+          echo "${installed} (pinned ${ANC_VERSION})"
+          if [ "$installed" != "anc ${ANC_VERSION}" ]; then
+            echo "::error title=Install anc::found '${installed}' on PATH, expected anc ${ANC_VERSION}"
+            exit 1
+          fi
+
+      - name: Build the release binary
+        run: cargo build --release --locked --bin "$ANC_BIN"
+
+      - name: Release binary size ceiling
+        if: inputs.release_size_ceiling_bytes > 0
+        run: |
+          size="$(stat -c %s "target/release/${ANC_BIN}")"
+          echo "target/release/${ANC_BIN} is ${size} bytes (ceiling ${SIZE_CEILING_BYTES})"
+          if [ "$size" -gt "$SIZE_CEILING_BYTES" ]; then
+            echo "::error title=Release binary size::${ANC_BIN} is ${size} bytes, over the ${SIZE_CEILING_BYTES}-byte ceiling; check that [profile.release] still applies from the workspace root"
+            exit 1
+          fi
+
+      # anc exits 0 when every row passes, 1 when warnings are present without
+      # failures, and 2 on failures, errors, or a usage error. The scorecard
+      # decides among the three, and its shape check rejects a usage error's
+      # output; any other exit means the audit never ran.
+      - name: anc audit
+        run: |
+          set -euo pipefail
+          status=0
+          anc audit . --bin "$ANC_BIN" --output json > anc-scorecard.json || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ] && [ "$status" -ne 2 ]; then
+            echo "::error title=anc audit::anc audit exited ${status} without a verdict"
+            exit 1
+          fi
+          jq -e '(.badge.score_pct | type == "number") and (.results | type == "array" and length > 0)' anc-scorecard.json > /dev/null
+          jq -r '.results[] | "\(.tier)\t\(.status)\t\(.id)"' anc-scorecard.json | sort > anc-rows.tsv
+          score="$(jq -r '.badge.score_pct' anc-scorecard.json)"
+          echo "anc score: ${score}% (floor ${ANC_SCORE_FLOOR}%)"
+          # `error` rows leave the score's denominator, so a harness that
+          # cannot run the binary would otherwise pass at 100.
+          blocking="$(jq -r --arg tiers "$ANC_BLOCKING_TIERS" '
+            [.results[]
+              | select(.status == "fail" or .status == "error")
+              | select($tiers == "any" or .tier == "must")
+              | "\(.id) (\(.tier // "untiered") \(.status))"]
+            | join(", ")' anc-scorecard.json)"
+          if [ -n "$blocking" ]; then
+            echo "::error title=anc audit::blocking rows: ${blocking}"
+            exit 1
+          fi
+          if ! jq -e --argjson floor "$ANC_SCORE_FLOOR" '.badge.score_pct >= $floor' anc-scorecard.json > /dev/null; then
+            echo "::error title=anc audit::score ${score}% is below the ${ANC_SCORE_FLOOR}% floor"
+            exit 1
+          fi
+
+      - name: Upload the scorecard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: anc-scorecard
+          path: |
+            anc-scorecard.json
+            anc-rows.tsv
 
   changelog-check:
     name: Changelog
