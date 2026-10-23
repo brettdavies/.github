@@ -1,15 +1,16 @@
 # Reusable CI workflow for brettdavies Rust CLI tools.
-# Runs formatting, linting, tests, security audit, and package check. A doc
-# build, an MSRV check, completions freshness, output discipline, and workflow
-# concurrency run when the caller turns each on; the last three run scripts
-# from the caller's checkout, because the rule each enforces is the
-# repository's own.
+# Runs formatting, linting, tests, security audit, and package check. Tests on
+# Windows and macOS, a doc build, an MSRV check, completions freshness, output
+# discipline, and workflow concurrency run when the caller turns each on; the
+# last three run scripts from the caller's checkout, because the rule each
+# enforces is the repository's own.
 #
 # Caller example:
 #   jobs:
 #     ci:
 #       uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
 #       with:
+#         cross_os_tests: true
 #         docs: true
 #         msrv: true
 #         completions: true          # scripts/generate-completions.sh --check
@@ -34,12 +35,17 @@ on:
         required: false
         default: false
       windows_nasm:
-        description: "Install NASM on the Windows job before cargo runs. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image."
+        description: "Install NASM on the Windows jobs before cargo runs. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image."
         type: boolean
         required: false
         default: false
       docs_only:
         description: "Skip every job. Default false. A caller sets it once it has established that nothing in the change can reach cargo, such as a pull request that edits only documentation no Rust source reads. A job skipped by its condition reports success, which a ruleset counts as passing, so required checks stay satisfied. The audit matrix skips its steps rather than itself: a matrix job skipped whole never expands, and its cells' checks would wait forever under their expanded names."
+        type: boolean
+        required: false
+        default: false
+      cross_os_tests:
+        description: "Run the `Windows test` and `macOS test` jobs: the `cargo test` that `Fmt, clippy, test` runs on Linux, on `windows-latest` and `macos-latest`. `Windows check` only compiles, so a path, file mode, rename, or lock that behaves differently off Linux passes it and fails here. Default false."
         type: boolean
         required: false
         default: false
@@ -255,6 +261,54 @@ jobs:
   # Each job from here to `changelog-check` runs only when its caller turns it
   # on. One that is off reports skipped, which a ruleset counts as passing, so
   # a consumer that sets none of these inputs keeps the verdicts it has.
+  #
+  # Two jobs rather than a matrix: a matrix job skipped by `docs_only` never
+  # expands, so a ruleset requiring the per-OS check would wait on it forever.
+  test-windows:
+    name: Windows test
+    if: ${{ inputs.cross_os_tests && !inputs.docs_only }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Install NASM
+        if: inputs.windows_nasm
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
+
+      - name: Tests (Windows)
+        run: cargo test
+
+  test-macos:
+    name: macOS test
+    if: ${{ inputs.cross_os_tests && !inputs.docs_only }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Tests (macOS)
+        run: cargo test
+
   docs:
     name: Doc build
     if: ${{ inputs.docs && !inputs.docs_only }}
