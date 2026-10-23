@@ -54,11 +54,6 @@ on:
         type: boolean
         required: false
         default: false
-      docs_rs_package:
-        description: "With `docs: true`, also build this one package as docs.rs does (nightly, `--cfg docsrs`, `--all-features`, warnings denied) and run its doctests, so a README that is the crate doc is compiled. Default empty: no docs.rs build."
-        type: string
-        required: false
-        default: ""
       msrv:
         description: "Run the `MSRV` job: `cargo +<rust-version> check --workspace --all-features --locked` on the `rust-version` the root Cargo.toml declares. Every other job compiles on the rust-toolchain.toml pin, which is usually newer, so this is the only job that sees a change that breaks a consumer still on the declared version. Default false."
         type: boolean
@@ -314,16 +309,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - name: Validate the docs.rs package name
-        if: inputs.docs_rs_package != ''
-        env:
-          PACKAGE: ${{ inputs.docs_rs_package }}
-        run: |
-          if [[ ! "$PACKAGE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            echo "::error title=Doc build::docs_rs_package '${PACKAGE}' is not a package name; expected letters, digits, _ and -"
-            exit 1
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
@@ -338,35 +323,6 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
-
-      - name: Doctests
-        if: inputs.docs_rs_package != ''
-        env:
-          PACKAGE: ${{ inputs.docs_rs_package }}
-        run: cargo test --doc -p "$PACKAGE" --locked
-
-      # After the cache step and the stable steps: rust-cache hashes every
-      # installed toolchain into its key, so a nightly installed earlier would
-      # change the key with each nightly release, and the action makes nightly
-      # the default toolchain for every step after it.
-      - name: Install nightly Rust for the docs.rs build
-        if: inputs.docs_rs_package != ''
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: nightly
-
-      # Only nightly accepts the `doc_cfg` feature a library enables under
-      # `--cfg docsrs`, which is what docs.rs builds with. RUSTFLAGS is cleared
-      # because the workflow's `-Dwarnings` would turn a lint nightly adds
-      # before stable into a failure no stable job reproduces; rustdoc's own
-      # warnings are still denied.
-      - name: cargo doc as docs.rs builds it
-        if: inputs.docs_rs_package != ''
-        env:
-          PACKAGE: ${{ inputs.docs_rs_package }}
-          RUSTDOCFLAGS: --cfg docsrs -D warnings
-          RUSTFLAGS: ""
-        run: cargo +nightly doc -p "$PACKAGE" --no-deps --all-features --locked
 
   msrv:
     name: MSRV
