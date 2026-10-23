@@ -118,6 +118,10 @@ jobs:
           fi
           shellcheck --version
           read -ra pathspecs <<< "$FILES"
+          if [ "${#pathspecs[@]}" -eq 0 ]; then
+            echo "::error title=shellcheck::shellcheck-files is empty; name the scripts to lint, or leave the input unset for '*.sh scripts/hooks/*'"
+            exit 1
+          fi
           mapfile -t files < <(git ls-files -- "${pathspecs[@]}" | sort -u)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error title=shellcheck::no tracked file matches '${FILES}'"

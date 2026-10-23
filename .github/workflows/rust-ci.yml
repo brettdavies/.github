@@ -356,6 +356,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Find scripts/generate-completions.sh
+        run: |
+          if [ ! -f scripts/generate-completions.sh ]; then
+            echo "::error title=Completions freshness::scripts/generate-completions.sh is not in this repository. Add a script whose --check exits non-zero when completions/ no longer matches the CLI, or stop passing completions: true."
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -375,6 +382,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Find scripts/lint-stdio.sh
+        run: |
+          if [ ! -f scripts/lint-stdio.sh ]; then
+            echo "::error title=Output discipline::scripts/lint-stdio.sh is not in this repository. Add the script that holds the repository's rule for where output may be written, or stop passing lint_stdio: true."
+            exit 1
+          fi
+
       - name: Install ripgrep
         run: |
           sudo apt-get update
@@ -392,7 +406,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check concurrency group namespacing
-        run: bash scripts/check-workflow-concurrency.sh
+        run: |
+          if [ ! -f scripts/check-workflow-concurrency.sh ]; then
+            echo "::error title=Workflow concurrency::scripts/check-workflow-concurrency.sh is not in this repository. Vendor it from the github-repo-setup skill's templates/check-workflow-concurrency.sh, or stop passing workflow_concurrency: true."
+            exit 1
+          fi
+          bash scripts/check-workflow-concurrency.sh
 
   # The audit grades the source tree and the release binary together, so the
   # source rows (`code-unwrap` and its kin) count beside the behavioral ones.
@@ -506,7 +525,7 @@ jobs:
 
       - name: Upload the scorecard
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: anc-scorecard
           path: |

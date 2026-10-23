@@ -116,8 +116,17 @@ jobs:
           CONFIG: ${{ inputs.config }}
         run: |
           status=0
+          report="$(mktemp)"
           uv run --script "$SKILL_DIR/scripts/audit_indexability.py" --config "$CONFIG" --format summary \
-            >>"$GITHUB_STEP_SUMMARY" || status=$?
+            >"$report" || status=$?
+          cat "$report" >>"$GITHUB_STEP_SUMMARY"
+          # Python exits 1 on an uncaught exception as well, so exit 1 means
+          # blocking rows only when the audit wrote its summary.
+          if [ "$status" -eq 1 ] && [ ! -s "$report" ]; then
+            echo "The audit of $CONFIG did not finish (exit 1 with no report); the job log has its error." >>"$GITHUB_STEP_SUMMARY"
+            echo "::error::audit_indexability.py exited 1 without a report."
+            exit 1
+          fi
           case "$status" in
             0) ;;
             1)

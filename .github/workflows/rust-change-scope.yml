@@ -79,6 +79,10 @@ jobs:
             echo "::notice title=Change scope::${EVENT} is not a pull request, so every Rust job runs"
             exit 0
           fi
+          if [ ! -f "$SCRIPT" ]; then
+            echo "::error title=Change scope::${SCRIPT} is not in this repository, so the change cannot be classified and a caller keyed on rust == 'false' runs every Rust job. Add the classifier, or pass its path as script."
+            exit 1
+          fi
           inputs="$(git diff --no-renames --name-only HEAD^1 HEAD | bash "$SCRIPT")"
           if [ -n "$inputs" ]; then
             echo "rust=true" >> "$GITHUB_OUTPUT"
