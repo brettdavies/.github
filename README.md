@@ -45,7 +45,6 @@ run a script from the caller's checkout, because the rule it enforces belongs to
 | ------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `cross_os_tests` (bool)               | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
 | `docs` (bool)                         | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
-| `docs_rs_package` (string, with docs) | `ci / Doc build`                       | also `cargo test --doc -p <package>` and the nightly `--cfg docsrs --all-features` build docs.rs runs          |
 | `msrv` (bool)                         | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
 | `completions` (bool)                  | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
 | `lint_stdio` (bool)                   | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
