@@ -1,4 +1,5 @@
-# Reusable actionlint + markdownlint for brettdavies repos.
+# Reusable actionlint + markdownlint for brettdavies repos, with an opt-in
+# shellcheck job (`shellcheck: true`).
 #
 # `pull-requests: read` on the actionlint job carries control's private-repo
 # reviewdog note: reviewdog reads the PR diff to scope findings, which a
@@ -12,6 +13,9 @@
 #       with:
 #         runs-on: ubuntu-24.04
 #         markdownlint-globs: '**/*.md'
+#         shellcheck: true
+#         shellcheck-files: 'scripts/*.sh tests/*.sh fixtures/bin/xr'
+#         shellcheck-severity: style
 #
 # Required caller permissions: contents: read, pull-requests: read
 name: Lint basics
@@ -29,8 +33,23 @@ on:
         type: string
         required: false
         default: '**/*.md'
+      shellcheck:
+        description: "Run the shellcheck job over the tracked files `shellcheck-files` matches. Default false."
+        type: boolean
+        required: false
+        default: false
+      shellcheck-files:
+        description: "Whitespace-separated git pathspecs naming the scripts to lint; each is passed to `git ls-files`, so only tracked files are checked. An extensionless script (a hook, a stub binary) needs its own pathspec."
+        type: string
+        required: false
+        default: '*.sh scripts/hooks/*'
+      shellcheck-severity:
+        description: "The minimum severity that fails the job: error, warning, info, or style."
+        type: string
+        required: false
+        default: 'warning'
       runs-on:
-        description: "Runner label for both jobs"
+        description: "Runner label for every job"
         type: string
         required: false
         default: 'ubuntu-latest'
@@ -76,3 +95,34 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: ${{ inputs.markdownlint-globs }}
+
+  # For a repository with shell scripts and no Rust (skill bundles), which
+  # rust-ci.yml's Shellcheck job never reaches. The hosted runner images ship
+  # shellcheck; the install covers a self-hosted label that does not.
+  shellcheck:
+    if: ${{ inputs.shellcheck }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        env:
+          FILES: ${{ inputs.shellcheck-files }}
+          SEVERITY: ${{ inputs.shellcheck-severity }}
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+          shellcheck --version
+          read -ra pathspecs <<< "$FILES"
+          mapfile -t files < <(git ls-files -- "${pathspecs[@]}" | sort -u)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=shellcheck::no tracked file matches '${FILES}'"
+            exit 1
+          fi
+          printf 'Linting %d file(s) at severity %s:\n' "${#files[@]}" "$SEVERITY"
+          printf '  %s\n' "${files[@]}"
+          shellcheck --severity="$SEVERITY" "${files[@]}"
