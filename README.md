@@ -32,24 +32,25 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-|                                 |                                                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                          |
-| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows job), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
-| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                      |
+|                                 |                                                                                                                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                           |
+| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows jobs), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                       |
 
 Opt-in jobs, each off by default. A job that is off reports skipped, which a ruleset counts as passing. Three of them
 run a script from the caller's checkout, because the rule it enforces belongs to the repository.
 
-| Input                                 | Job (check name under a `ci:` caller) | What it runs                                                                                                   |
-| ------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `docs` (bool)                         | `ci / Doc build`                      | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
-| `docs_rs_package` (string, with docs) | `ci / Doc build`                      | also `cargo test --doc -p <package>` and the nightly `--cfg docsrs --all-features` build docs.rs runs          |
-| `msrv` (bool)                         | `ci / MSRV`                           | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
-| `completions` (bool)                  | `ci / Completions freshness`          | `scripts/generate-completions.sh --check`                                                                      |
-| `lint_stdio` (bool)                   | `ci / Output discipline`              | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
-| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`           | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
-| `anc_version` (string)                | `ci / Agent-native audit`             | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
+| Input                                 | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
+| ------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `cross_os_tests` (bool)               | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
+| `docs` (bool)                         | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
+| `docs_rs_package` (string, with docs) | `ci / Doc build`                       | also `cargo test --doc -p <package>` and the nightly `--cfg docsrs --all-features` build docs.rs runs          |
+| `msrv` (bool)                         | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
+| `completions` (bool)                  | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
+| `lint_stdio` (bool)                   | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
+| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`            | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+| `anc_version` (string)                | `ci / Agent-native audit`              | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
 
 The audit's other inputs: `anc_bin` (string, required with `anc_version`), `anc_score_floor` (number, default `0`; fails
 below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any` to fail on every `fail` or `error`
@@ -68,6 +69,7 @@ jobs:
   ci:
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
     with:
+      cross_os_tests: true
       docs: true
       msrv: true
       completions: true
