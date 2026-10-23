@@ -143,8 +143,14 @@ jobs:
 ### `rust-release.yml`
 
 Full release pipeline: version check, audit, cross-platform build (7 targets — 5 hard-required, 2 linux-musl rows
-soft-fail by default), crates.io publish (Trusted Publishing OIDC), draft GitHub Release (notes extracted from the
-changelog the `changelog` input names, the repository root's `CHANGELOG.md` by default), Homebrew dispatch.
+soft-fail by default), crates.io publish (Trusted Publishing OIDC), a published GitHub Release not yet marked latest
+(notes extracted from the changelog the `changelog` input names, the repository root's `CHANGELOG.md` by default),
+Homebrew dispatch.
+
+The release is published rather than drafted because `brew pr-pull` finds it by tag through
+`GET /repos/{owner}/{repo}/releases/tags/{tag}`, which returns no drafts, and on that 404 creates a second release for
+the same tag. It stays unmarked as latest until `rust-finalize-release.yml` runs after the bottles upload, so the
+repository's latest release always has them.
 
 With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
 CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
@@ -263,7 +269,8 @@ jobs:
 
 ### `rust-finalize-release.yml`
 
-Publishes a draft GitHub Release after Homebrew bottles are uploaded.
+Marks the tag's GitHub Release as the repository's latest once Homebrew bottles are uploaded, publishing it first if it
+is still a draft.
 
 |                                 |                                                       |
 | ------------------------------- | ----------------------------------------------------- |
@@ -459,8 +466,10 @@ Migrate to `@v1` semver tags when a third-party contributor or third+ consumer a
 
 ## Naming coupling
 
-The Homebrew dispatch chain assumes `formula name == crate name == repo name`. If a future tool breaks this coupling,
-add an optional `formula` input to `rust-release.yml` and update `homebrew-tap/publish.yml`.
+The Homebrew dispatch names the formula after the crate: `rust-release.yml` sends `client_payload[formula]` as the
+`crate` input, so `formula name == crate name`. The repository travels separately as `client_payload[repo]`, and
+`homebrew-tap/publish.yml` reads the owner and repository from the formula's `url`, so the repository name may differ. A
+tool whose formula is named differently from its crate needs an optional `formula` input on `rust-release.yml`.
 
 ## Local hooks
 

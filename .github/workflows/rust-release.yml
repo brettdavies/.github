@@ -582,6 +582,11 @@ jobs:
           sha256sum ./* > sha256sum.txt
           ls -la
 
+      # Published, never a draft: `brew pr-pull` finds the release through
+      # GET /repos/{owner}/{repo}/releases/tags/{tag}, which returns no drafts,
+      # and on that 404 creates a second release for the same tag. make_latest
+      # stays false until rust-finalize-release.yml runs after the bottles
+      # upload, so the repository's latest release always has them.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:

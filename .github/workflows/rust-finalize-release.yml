@@ -3,9 +3,9 @@
 # Triggered by repository_dispatch from homebrew-tap's publish workflow.
 #
 # Idempotent: succeeds whether the release is still a draft or already published.
-# publish.yml undrafts the release before brew pr-pull runs, so by the time this
-# workflow fires the release is typically already published. This step ensures
-# make_latest=true and handles the legacy case where the release is still a draft.
+# rust-release.yml creates the release published with make_latest: false, so
+# this workflow's work is make_latest=true once the bottles are uploaded; a
+# release still in draft is published as well.
 #
 # Caller example:
 #   jobs:
