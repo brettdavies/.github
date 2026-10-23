@@ -68,8 +68,22 @@ jobs:
         run: |
           set -euo pipefail
           read -ra paths <<< "$SURFACE_PATHS"
+          if [ "${#paths[@]}" -eq 0 ]; then
+            echo "::error title=Surface growth::surface_paths is empty; name the paths the script compares, or leave the input unset for completions schema"
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/base"
-          git archive HEAD^1 "${paths[@]}" | tar -x -C "$RUNNER_TEMP/base"
+          present=()
+          for path in "${paths[@]}"; do
+            if git cat-file -e "HEAD^1:${path}" 2>/dev/null; then
+              present+=("$path")
+            else
+              echo "::notice title=Surface growth::${path} is not in the base tree, so the base side holds none of it"
+            fi
+          done
+          if [ "${#present[@]}" -gt 0 ]; then
+            git archive HEAD^1 "${present[@]}" | tar -x -C "$RUNNER_TEMP/base"
+          fi
 
       # The body reaches the script through the environment and a file, never
       # through expression interpolation into the shell.
@@ -78,5 +92,9 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           SCRIPT: ${{ inputs.script }}
         run: |
+          if [ ! -f "$SCRIPT" ]; then
+            echo "::error title=Surface growth::${SCRIPT} is not in this repository. Add the surface check, or pass its path as script."
+            exit 1
+          fi
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           bash "$SCRIPT" check "$RUNNER_TEMP/base" . "$RUNNER_TEMP/pr-body.md"

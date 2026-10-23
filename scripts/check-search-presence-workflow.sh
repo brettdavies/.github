@@ -16,7 +16,9 @@
 # The exit property is checked by running the audit step's own `run:` block,
 # as the runner does, with a stub `uv` that exits with each of the audit's
 # codes: 0 passes, 1 is rows at or above fail_on, 2 is an audit that did not
-# finish, which also leaves a line in the job summary.
+# finish, which also leaves a line in the job summary. Python exits 1 on an
+# uncaught exception too, so an exit 1 that writes no report must also leave
+# that line, and one that writes a report must keep it in the summary.
 #
 # Exit codes: 0 = every property holds, 1 = one does not (each named),
 # 2 = the workflow or yq is missing.
@@ -96,6 +98,9 @@ else
   mkdir -p "$sandbox/bin"
   cat >"$sandbox/bin/uv" <<'EOF'
 #!/usr/bin/env bash
+if [ -n "${STUB_REPORT:-}" ]; then
+  printf '%s\n' "$STUB_REPORT"
+fi
 exit "$STUB_EXIT"
 EOF
   chmod +x "$sandbox/bin/uv"
@@ -114,6 +119,25 @@ EOF
     fi
     if [ "$code" -eq 2 ] && ! grep -q "did not finish" "$sandbox/summary"; then
       fail "the audit step leaves no 'did not finish' line in the job summary when the audit exits 2"
+    fi
+  done
+
+  report='| fail | R1 | robots.txt answers 500 |'
+  for with_report in false true; do
+    stub_report=""
+    if $with_report; then
+      stub_report="$report"
+    fi
+    : >"$sandbox/summary"
+    env PATH="$sandbox/bin:$PATH" STUB_EXIT=1 STUB_REPORT="$stub_report" CONFIG=search-presence.toml \
+      SKILL_DIR="$sandbox/skill" GITHUB_STEP_SUMMARY="$sandbox/summary" \
+      bash --noprofile --norc -eo pipefail "$sandbox/audit.sh" </dev/null >"$sandbox/log" 2>&1 || true
+    if ! $with_report && ! grep -q "did not finish" "$sandbox/summary"; then
+      fail "the audit step reads an exit 1 with no report as blocking rows; the job summary must say the audit did not finish"
+    elif $with_report && ! grep -qF "$report" "$sandbox/summary"; then
+      fail "the audit step drops the report from the job summary when the audit exits 1"
+    elif $with_report && grep -q "did not finish" "$sandbox/summary"; then
+      fail "the audit step calls an exit 1 with a report unfinished"
     fi
   done
 fi
