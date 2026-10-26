@@ -1,5 +1,5 @@
-# Reusable actionlint + markdownlint for brettdavies repos, with an opt-in
-# shellcheck job (`shellcheck: true`).
+# Reusable actionlint + markdownlint for brettdavies repos, with opt-in
+# shellcheck (`shellcheck: true`) and plan frontmatter (`plans: true`) jobs.
 #
 # `pull-requests: read` on the actionlint job carries control's private-repo
 # reviewdog note: reviewdog reads the PR diff to scope findings, which a
@@ -16,6 +16,8 @@
 #         shellcheck: true
 #         shellcheck-files: 'scripts/*.sh tests/*.sh fixtures/bin/xr'
 #         shellcheck-severity: style
+#         plans: true
+#         plans-globs: 'docs/plans/*.md'
 #
 # Required caller permissions: contents: read, pull-requests: read
 name: Lint basics
@@ -48,6 +50,16 @@ on:
         type: string
         required: false
         default: 'warning'
+      plans:
+        description: "Run the plans job, which checks each plan's frontmatter status and the keys that status needs. Default false."
+        type: boolean
+        required: false
+        default: false
+      plans-globs:
+        description: "Whitespace-separated glob patterns naming the plan files, expanded from the repository root; ** matches any depth. A pattern that matches no file fails the job."
+        type: string
+        required: false
+        default: 'docs/plans/*.md'
       runs-on:
         description: "Runner label for every job"
         type: string
@@ -127,3 +139,18 @@ jobs:
           printf 'Linting %d file(s) at severity %s:\n' "${#files[@]}" "$SEVERITY"
           printf '  %s\n' "${files[@]}"
           shellcheck --severity="$SEVERITY" "${files[@]}"
+
+  # The convention is the plan frontmatter table in this repository's README.
+  # A `./actions/...` path would resolve against the caller's checkout, so the
+  # action is addressed by repository.
+  plans:
+    if: ${{ inputs.plans }}
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Plan frontmatter
+        uses: brettdavies/.github/actions/plan-frontmatter@main
+        with:
+          globs: ${{ inputs.plans-globs }}

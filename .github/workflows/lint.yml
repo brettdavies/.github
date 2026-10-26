@@ -41,6 +41,52 @@ jobs:
       - name: Check the search-presence workflow contract
         run: bash scripts/check-search-presence-workflow.sh
 
+  # Lint-basics callers reach the plan-frontmatter action only through @main,
+  # so this job runs the checker's tests, the pinned yq download, and the
+  # action itself from the PR's tree, on a passing and a failing plan.
+  plan-frontmatter:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Unit tests
+        run: python3 -B -m unittest discover -s actions/plan-frontmatter -p 'test_*.py' -v
+      # The stub stands in for the Python yq wrapper, which forces the download.
+      - name: Pinned yq download
+        run: |
+          set -euo pipefail
+          stub="$RUNNER_TEMP/yq-stub"
+          mkdir -p "$stub"
+          printf '#!/bin/sh\necho "yq 3.4.3"\n' > "$stub/yq"
+          chmod +x "$stub/yq"
+          yq_path=$(PATH="$stub:$PATH" bash actions/plan-frontmatter/install-yq.sh "$RUNNER_TEMP/yq-download")
+          test "$yq_path" = "$RUNNER_TEMP/yq-download/yq"
+          "$yq_path" --version | grep -F 'mikefarah/yq/) version v4.54.1'
+      - name: Write sample plans
+        run: |
+          set -euo pipefail
+          mkdir -p sample-plans/valid sample-plans/invalid
+          printf -- '---\nstatus: merged\nprs: ["#1"]\ncompleted: 2026-10-26\n---\n# Plan\n' > sample-plans/valid/merged.md
+          printf -- '---\nstatus: merged\nprs: [#1]\n---\n# Plan\n' > sample-plans/invalid/merged.md
+      - name: Action passes a valid plan
+        uses: ./actions/plan-frontmatter
+        with:
+          globs: sample-plans/valid/*.md
+      - name: Action fails an invalid plan
+        id: invalid
+        continue-on-error: true
+        uses: ./actions/plan-frontmatter
+        with:
+          globs: sample-plans/invalid/*.md
+      - name: Require the invalid plan to fail
+        env:
+          OUTCOME: ${{ steps.invalid.outcome }}
+        run: |
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error title=plan frontmatter::the action passed an invalid plan (outcome: $OUTCOME)"
+            exit 1
+          fi
+
   actionlint:
     runs-on: ubuntu-22.04
     timeout-minutes: 10

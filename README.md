@@ -23,7 +23,10 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
       search-presence.yml   # reusable post-deploy search regression gate for a site
+      lint-basics.yml       # reusable actionlint, markdownlint, shellcheck, and plan frontmatter
       lint.yml              # internal: actionlint on push/PR
+  actions/
+    plan-frontmatter/       # composite action behind lint-basics.yml's plans job
 ```
 
 ## Reusable workflows
@@ -421,6 +424,96 @@ jobs:
       SEARCH_PRESENCE_SKILL_TOKEN: ${{ secrets.SEARCH_PRESENCE_SKILL_TOKEN }}
 ```
 
+### `lint-basics.yml`
+
+actionlint and markdownlint for any repository, with opt-in shellcheck and plan frontmatter jobs. A job that is off
+reports skipped, which a ruleset counts as passing.
+
+|                                 |                                         |
+| ------------------------------- | --------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)            |
+| **Required caller permissions** | `contents: read`, `pull-requests: read` |
+
+| Input                 | Type    | Default                | Effect                                                                                                      |
+| --------------------- | ------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `markdownlint`        | boolean | `true`                 | Runs `basics / markdownlint`                                                                                |
+| `markdownlint-globs`  | string  | `**/*.md`              | Glob patterns passed to markdownlint-cli2                                                                   |
+| `shellcheck`          | boolean | `false`                | Runs `basics / shellcheck`                                                                                  |
+| `shellcheck-files`    | string  | `*.sh scripts/hooks/*` | Whitespace-separated git pathspecs; only tracked files are checked                                          |
+| `shellcheck-severity` | string  | `warning`              | Minimum severity that fails the job: `error`, `warning`, `info`, or `style`                                 |
+| `plans`               | boolean | `false`                | Runs `basics / plans`, the [plan frontmatter](#plan-frontmatter) check                                      |
+| `plans-globs`         | string  | `docs/plans/*.md`      | Whitespace-separated glob patterns from the repository root; `**` matches any depth; each must match a file |
+| `runs-on`             | string  | `ubuntu-latest`        | Runner label for every job                                                                                  |
+
+`basics / actionlint` always runs. The check names assume a `basics:` caller job.
+
+**Caller example:**
+
+```yaml
+name: Lint
+on:
+  pull_request:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  basics:
+    uses: brettdavies/.github/.github/workflows/lint-basics.yml@main
+    with:
+      shellcheck: true
+      plans: true
+```
+
+#### Plan frontmatter
+
+The `plans` job runs the `actions/plan-frontmatter` composite action over every file `plans-globs` matches. Each plan
+opens with YAML frontmatter, the lines between a `---` on line 1 and the next `---` line, and carries a `status:` from a
+closed set plus the keys that status requires:
+
+| `status`     | Meaning                                                | Required keys                     |
+| ------------ | ------------------------------------------------------ | --------------------------------- |
+| `proposed`   | Not approved, or not started                           | none                              |
+| `active`     | Some units merged or in open PRs                       | none                              |
+| `blocked`    | Waiting on something named                             | `blocked_on`                      |
+| `merged`     | Every unit on the integration branch, not yet released | `prs`, `completed`                |
+| `released`   | Shipped in a release or a production deploy            | `prs`, `completed`, `released_in` |
+| `done`       | A spike or process plan that ships nothing             | `completed`                       |
+| `superseded` | Replaced by another plan                               | `superseded_by`                   |
+| `dropped`    | Abandoned                                              | `dropped_reason`                  |
+
+| Key              | Format                                                                                                                     | Allowed on                   |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `prs`            | A non-empty YAML list of quoted PR refs, each `#N` or `owner/repo#N`: `prs: ["#149", "brettdavies/agentnative-site#40"]`   | every status                 |
+| `completed`      | A real calendar date, `YYYY-MM-DD`                                                                                         | `merged`, `released`, `done` |
+| `released_in`    | A release tag `vX.Y.Z` (an optional `-pre` or `+build` suffix), a quoted release PR `"#N"`, or the 40-character commit SHA | `released`                   |
+| `blocked_on`     | Non-empty text naming what the plan waits on                                                                               | `blocked`                    |
+| `superseded_by`  | A plan path, or `owner/repo:path` for a plan in another repository                                                         | `superseded`                 |
+| `dropped_reason` | Non-empty text saying why the plan was abandoned                                                                           | `dropped`                    |
+
+An unquoted `#` starts a YAML comment, so PR refs are always quoted: `prs: [#149]` does not parse, and `prs: #149` reads
+as no value. A key on a status that does not own it fails, such as `completed` on an `active` plan. Every other key
+passes unread (`title`, `type`, `date`, `origin`, `topic`, `deepened`, `artifact_contract`, and so on). A file with no
+frontmatter, frontmatter that is not valid YAML, and a repeated key fail too. Each problem is an error annotation on its
+file and line, worded as the fix, and the job fails on any.
+
+```yaml
+---
+title: "feat: score every requirement row"
+status: released
+prs: ["#149", "#152"]
+completed: 2026-10-20
+released_in: v0.7.0
+---
+```
+
+The checker is Python 3 standard library and parses the frontmatter with mikefarah yq v4 (`yq -o=json`), which the
+GitHub-hosted Ubuntu and macOS images ship. On a runner without it, the action downloads a pinned yq release and checks
+its sha256 first. To run the check locally from a plan repository, with mikefarah yq v4 on `PATH`:
+
+```bash
+python3 <path-to-this-repo>/actions/plan-frontmatter/check.py 'docs/plans/*.md'
+```
+
 ## Ruleset templates
 
 Starting points for GitHub branch protection, committed under `.github/rulesets/`. Consumer repos copy these into their
@@ -446,6 +539,7 @@ gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/prote
 - Input validation: `crate` and `bin` are validated with `[a-zA-Z0-9_-]+` regex
 - `search-presence.yml` refuses a `config` path outside the repository and hands the skill the config by path, so no
   config value reaches a shell
+- The `plan-frontmatter` action downloads yq only as a pinned release whose sha256 matches before it runs
 - Tag format validation in finalize-release (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 - Per-job permission narrowing inside reusable workflows
 
@@ -475,7 +569,8 @@ tool whose formula is named differently from its crate needs an optional `formul
 ## Local hooks
 
 `scripts/hooks/` carries `pre-commit` (actionlint + markdownlint on staged files) and `pre-push` (actionlint,
-markdownlint, shellcheck across the repo), mirroring the CI lint gate locally. Activate per clone:
+markdownlint, shellcheck, and the plan-frontmatter tests across the repo), mirroring the CI lint gate locally. Activate
+per clone:
 
 ```bash
 git config core.hooksPath scripts/hooks
