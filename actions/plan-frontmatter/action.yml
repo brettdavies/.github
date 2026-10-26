@@ -1,0 +1,34 @@
+name: Plan frontmatter
+description: >-
+  Check that each plan document's YAML frontmatter carries a status from the
+  closed set (proposed, active, blocked, merged, released, done, superseded,
+  dropped) and the keys that status needs, in the formats the convention
+  names. One error annotation per problem; the step fails on any.
+
+inputs:
+  globs:
+    description: >-
+      Whitespace-separated glob patterns naming the plan files, expanded from
+      the workspace root; ** matches any depth. A pattern that matches no file
+      fails the check.
+    required: false
+    default: docs/plans/*.md
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve yq
+      id: yq
+      shell: bash
+      run: |
+        set -euo pipefail
+        yq_path=$(bash "$GITHUB_ACTION_PATH/install-yq.sh" "$RUNNER_TEMP/plan-frontmatter-yq")
+        "$yq_path" --version
+        echo "path=$yq_path" >> "$GITHUB_OUTPUT"
+
+    - name: Check plan frontmatter
+      shell: bash
+      env:
+        GLOBS: ${{ inputs.globs }}
+        YQ: ${{ steps.yq.outputs.path }}
+      run: python3 "$GITHUB_ACTION_PATH/check.py" "$GLOBS"
