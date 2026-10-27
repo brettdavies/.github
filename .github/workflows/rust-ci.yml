@@ -148,6 +148,11 @@ jobs:
     name: Windows check
     if: ${{ !inputs.docs_only }}
     runs-on: windows-latest
+    env:
+      # Crate downloads on hosted Windows runners fail with curl error 16
+      # ("Error in the HTTP2 framing layer"), which cargo does not retry;
+      # HTTP/1.1 avoids it.
+      CARGO_HTTP_MULTIPLEXING: "false"
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -262,6 +267,11 @@ jobs:
     name: Windows test
     if: ${{ inputs.cross_os_tests && !inputs.docs_only }}
     runs-on: windows-latest
+    env:
+      # Crate downloads on hosted Windows runners fail with curl error 16
+      # ("Error in the HTTP2 framing layer"), which cargo does not retry;
+      # HTTP/1.1 avoids it.
+      CARGO_HTTP_MULTIPLEXING: "false"
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
