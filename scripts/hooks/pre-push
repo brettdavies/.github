@@ -8,6 +8,37 @@
 # Activated per clone via: git config core.hooksPath scripts/hooks
 set -euo pipefail
 
+# Git writes one line per pushed ref on stdin,
+# `<local ref> <local sha> <remote ref> <remote sha>`, with an all-zero local
+# sha for a delete. A push made only of deletes delivers no commit to check.
+# The read is bounded because a stdin nobody closes would park the push; a
+# terminal, no ref lines, or a timeout all run the checks.
+stdin_wait_seconds=${PRE_PUSH_STDIN_WAIT_SECONDS:-5}
+ref_lines=0
+delete_lines=0
+stdin_timed_out=false
+if [ ! -t 0 ]; then
+  while true; do
+    read_status=0
+    read -r -t "$stdin_wait_seconds" _local_ref local_sha _remote_ref _remote_sha || read_status=$?
+    if [ "$read_status" -gt 128 ]; then
+      stdin_timed_out=true
+      break
+    fi
+    if [ -n "$local_sha" ]; then
+      ref_lines=$((ref_lines + 1))
+      if [[ $local_sha =~ ^0+$ ]]; then
+        delete_lines=$((delete_lines + 1))
+      fi
+    fi
+    [ "$read_status" -eq 0 ] || break
+  done
+fi
+if [ "$stdin_timed_out" = false ] && [ "$ref_lines" -gt 0 ] && [ "$ref_lines" -eq "$delete_lines" ]; then
+  echo "pre-push: nothing to check: the push only deletes"
+  exit 0
+fi
+
 if command -v actionlint >/dev/null 2>&1; then
   actionlint
 else
