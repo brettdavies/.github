@@ -213,7 +213,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             cross: true
             soft_fail: true
-          - os: macos-14
+          - os: macos-26
             target: aarch64-apple-darwin
             soft_fail: false
           - os: macos-latest
