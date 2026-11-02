@@ -430,24 +430,25 @@ jobs:
 
 ### `lint-basics.yml`
 
-actionlint and markdownlint for any repository, with opt-in shellcheck and plan frontmatter jobs. A job that is off
-reports skipped, which a ruleset counts as passing.
+actionlint and markdownlint for any repository, with opt-in shellcheck, plan frontmatter, and workflow concurrency jobs.
+A job that is off reports skipped, which a ruleset counts as passing.
 
 |                                 |                                         |
 | ------------------------------- | --------------------------------------- |
 | **Trigger**                     | `workflow_call` (no secrets)            |
 | **Required caller permissions** | `contents: read`, `pull-requests: read` |
 
-| Input                 | Type    | Default                | Effect                                                                                                      |
-| --------------------- | ------- | ---------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `markdownlint`        | boolean | `true`                 | Runs `basics / markdownlint`                                                                                |
-| `markdownlint-globs`  | string  | `**/*.md`              | Glob patterns passed to markdownlint-cli2                                                                   |
-| `shellcheck`          | boolean | `false`                | Runs `basics / shellcheck`                                                                                  |
-| `shellcheck-files`    | string  | `*.sh scripts/hooks/*` | Whitespace-separated git pathspecs; only tracked files are checked                                          |
-| `shellcheck-severity` | string  | `warning`              | Minimum severity that fails the job: `error`, `warning`, `info`, or `style`                                 |
-| `plans`               | boolean | `false`                | Runs `basics / plans`, the [plan frontmatter](#plan-frontmatter) check                                      |
-| `plans-globs`         | string  | `docs/plans/*.md`      | Whitespace-separated glob patterns from the repository root; `**` matches any depth; each must match a file |
-| `runs-on`             | string  | `ubuntu-latest`        | Runner label for every job                                                                                  |
+| Input                  | Type    | Default                | Effect                                                                                                         |
+| ---------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `markdownlint`         | boolean | `true`                 | Runs `basics / markdownlint`                                                                                   |
+| `markdownlint-globs`   | string  | `**/*.md`              | Glob patterns passed to markdownlint-cli2                                                                      |
+| `shellcheck`           | boolean | `false`                | Runs `basics / shellcheck`                                                                                     |
+| `shellcheck-files`     | string  | `*.sh scripts/hooks/*` | Whitespace-separated git pathspecs; only tracked files are checked                                             |
+| `shellcheck-severity`  | string  | `warning`              | Minimum severity that fails the job: `error`, `warning`, `info`, or `style`                                    |
+| `plans`                | boolean | `false`                | Runs `basics / plans`, the [plan frontmatter](#plan-frontmatter) check                                         |
+| `plans-globs`          | string  | `docs/plans/*.md`      | Whitespace-separated glob patterns from the repository root; `**` matches any depth; each must match a file    |
+| `workflow-concurrency` | boolean | `false`                | Runs `basics / Workflow concurrency`: `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup |
+| `runs-on`              | string  | `ubuntu-latest`        | Runner label for every job                                                                                     |
 
 `basics / actionlint` always runs. The check names assume a `basics:` caller job.
 
@@ -466,6 +467,7 @@ jobs:
     with:
       shellcheck: true
       plans: true
+      workflow-concurrency: true
 ```
 
 #### Plan frontmatter
