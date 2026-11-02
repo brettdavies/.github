@@ -119,6 +119,14 @@ env:
   # curl error 16 ("Error in the HTTP2 framing layer"), which cargo does not
   # retry; HTTP/1.1 avoids it.
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Line tables keep file and line in a failing test's backtrace while cutting a
+  # cold build by about a third and the target directory by about half against
+  # full debug info (measured on xurl-rs, Linux and Windows). Release builds are
+  # unaffected. Incremental artifacts only add weight to a cached CI build. A
+  # caller's own workflow `env` never reaches these jobs, so the setting lives
+  # here; `line-tables-only` needs Rust 1.71 or later.
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   check:

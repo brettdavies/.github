@@ -59,6 +59,10 @@ below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any`
 row), and `release_size_ceiling_bytes` (number, default `0` for no ceiling). The scorecard uploads as the
 `anc-scorecard` artifact on every run.
 
+Every job builds the `dev` and `test` profiles with line-tables-only debug info and no incremental artifacts, set
+in the workflow's own `env`. A caller's workflow `env` never reaches a called workflow's jobs, so a caller need not
+set either for this workflow; `line-tables-only` needs Rust 1.71 or later.
+
 **Caller example:**
 
 ```yaml
