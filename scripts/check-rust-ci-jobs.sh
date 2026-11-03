@@ -55,7 +55,10 @@ done < <(comm -23 <(printf '%s\n' "$jobs") <(printf '%s\n' "$known"))
 # A matrix job carries its test in `env` (RUN_STEPS), every other job in `if`.
 while IFS= read -r id; do
   gate="contains(fromJSON(inputs.jobs), '$id')"
-  if ! yq ".jobs.\"$id\" | (.if, .env) | .. | select(tag == \"!!str\")" "$wf" | grep -qF "$gate"; then
+  # Captured before matching: `grep -q` exits at the first match, and under
+  # pipefail the SIGPIPE that leaves yq would fail a job that passes.
+  conditions=$(yq ".jobs.\"$id\" | (.if, .env) | .. | select(tag == \"!!str\")" "$wf")
+  if ! grep -qF "$gate" <<<"$conditions"; then
     fail "job '$id' does not test the jobs input for its own id; add $gate to its if (or, in a matrix job, to RUN_STEPS)"
   fi
 done <<<"$jobs"
