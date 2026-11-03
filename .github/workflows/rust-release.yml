@@ -373,15 +373,20 @@ jobs:
           # ten annotations, and the summary below carries the fix.
           bad=0
           first=""
+          newest="$MACOSX_DEPLOYMENT_TARGET"
           while IFS=$'\t' read -r object minos; do
             if newer "$minos" "$MACOSX_DEPLOYMENT_TARGET"; then
               echo "${object} declares macOS ${minos}, newer than ${MACOSX_DEPLOYMENT_TARGET}, on ${TARGET}"
               bad=$((bad + 1))
               first="${first:-${object} (macOS ${minos})}"
+              if newer "$minos" "$newest"; then newest="$minos"; fi
             fi
           done < macos-minos.tsv
+          # The job already exports the variable, so a newer object comes from
+          # a build step that ignores it, or from a prebuilt library: the fix
+          # names both ways out.
           if [ "$bad" -gt 0 ]; then
-            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}; set MACOSX_DEPLOYMENT_TARGET for the whole build"
+            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}. To ship macOS ${newest} as the minimum, raise macos_deployment_target to ${newest}. To keep ${MACOSX_DEPLOYMENT_TARGET}, make the crate that built them read the variable: set MACOSX_DEPLOYMENT_TARGET for the whole build"
             exit 1
           fi
 
