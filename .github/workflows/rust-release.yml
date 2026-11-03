@@ -386,7 +386,7 @@ jobs:
           # a build step that ignores it, or from a prebuilt library: the fix
           # names both ways out.
           if [ "$bad" -gt 0 ]; then
-            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}. To ship macOS ${newest} as the minimum, raise macos_deployment_target to ${newest}. To keep ${MACOSX_DEPLOYMENT_TARGET}, make the crate that built them read the variable: set MACOSX_DEPLOYMENT_TARGET for the whole build"
+            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}. Nothing was published. To ship macOS ${newest} as the minimum, raise macos_deployment_target to ${newest}. To keep ${MACOSX_DEPLOYMENT_TARGET}, make the crate that built them read the variable: set MACOSX_DEPLOYMENT_TARGET for the whole build"
             exit 1
           fi
 
