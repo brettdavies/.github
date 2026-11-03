@@ -143,7 +143,9 @@ jobs:
           dir="target/${TARGET}/release"
           {
             find "$dir" -maxdepth 1 -type f -perm -u+x
-            find "$dir/build" -type f \( -name '*.a' -o -name '*.o' \)
+            # A build whose dependencies run no build script has no build/,
+            # and a failed find would end the step under pipefail.
+            [ ! -d "$dir/build" ] || find "$dir/build" -type f \( -name '*.a' -o -name '*.o' \)
           } 2>/dev/null | sort > macos-objects.txt
           # One line per object: its path and the macOS it declares, from
           # LC_BUILD_VERSION or, in older objects, LC_VERSION_MIN_MACOSX. An
