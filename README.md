@@ -35,33 +35,70 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-|                                 |                                                                                                                                                                                                                                        |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                           |
-| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows jobs), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
-| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                       |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `audit_ref` (string, optional, default empty; the ref the audit checks out), `windows_nasm` (bool, optional, default `false`; NASM on the Windows jobs), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing), `toolchain` (string, optional, default `stable`; a rust-toolchain file in the caller's repository outranks it), and the run-shaping inputs below |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 Opt-in jobs, each off by default. A job that is off reports skipped, which a ruleset counts as passing. Three of them
 run a script from the caller's checkout, because the rule it enforces belongs to the repository.
 
-| Input                                 | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
-| ------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cross_os_tests` (bool)               | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
-| `docs` (bool)                         | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
-| `msrv` (bool)                         | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
-| `completions` (bool)                  | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
-| `lint_stdio` (bool)                   | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
-| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`            | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
-| `anc_version` (string)                | `ci / Agent-native audit`              | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
+| Input                         | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
+| ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
+| `docs` (bool)                 | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
+| `msrv` (bool)                 | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
+| `completions` (bool)          | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
+| `lint_stdio` (bool)           | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
+| `workflow_concurrency` (bool) | `ci / Workflow concurrency`            | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+| `anc_version` (string)        | `ci / Agent-native audit`              | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
 
 The audit's other inputs: `anc_bin` (string, required with `anc_version`), `anc_score_floor` (number, default `0`; fails
 below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any` to fail on every `fail` or `error`
 row), and `release_size_ceiling_bytes` (number, default `0` for no ceiling). The scorecard uploads as the
-`anc-scorecard` artifact on every run.
+`anc-scorecard` artifact whenever the audit runs.
 
-Every job builds the `dev` and `test` profiles with line-tables-only debug info and no incremental artifacts, set
-in the workflow's own `env`. A caller's workflow `env` never reaches a called workflow's jobs, so a caller need not
-set either for this workflow; `line-tables-only` needs Rust 1.71 or later.
+Every job builds the `dev` and `test` profiles with line-tables-only debug info and no incremental artifacts, set in the
+workflow's own `env`. A caller's workflow `env` never reaches a called workflow's jobs, so a caller need not set either
+for this workflow; `line-tables-only` needs Rust 1.71 or later.
+
+Every job installs its toolchain with `rustup`. A caller with a `rust-toolchain.toml` or `rust-toolchain` file builds on
+the toolchain the file names, with its components; any other caller builds on `toolchain`.
+
+#### Choosing, warming, and splitting jobs
+
+Three inputs change how a run goes rather than adding a check. Each defaults to the run described above.
+
+| Input                  | Default | What it does                                                                                                                                                                                                                                                                                |
+| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobs` (string)        | `all`   | A JSON array of the job ids to run, such as `'["check","tests"]'`; `'[]'` runs none. A job runs only when its own input turns it on, `docs_only` is false, and `jobs` names it. An id the workflow does not have fails `ci / Inputs`, which a ruleset should require.                       |
+| `warm_cache` (bool)    | `false` | Builds what each check compiles without running it (`--no-run` tests, `cargo check` for clippy), and saves each cache only when its job succeeds. Each job's name gains a `(warm cache)` suffix; jobs that keep no Rust cache skip. Pass it on push, so pull requests restore those caches. |
+| `test_runner` (string) | `cargo` | `nextest` splits `Fmt, clippy, test` into `Fmt, clippy` and `Tests`. `Tests` installs cargo-nextest at `nextest_version` (required), then runs `cargo nextest run --profile ci` and `cargo test --doc`; the `ci` profile comes from the caller's `.config/nextest.toml`.                    |
+
+With `test_runner: nextest`, `test_partitions` (number, 1 to 4, default 1) runs `Tests` as that many
+`--partition hash:k/N` jobs, the first of which also runs the doc tests, and `anc_debug_audit` (bool, default `false`)
+has `Tests` build the debug `anc_bin` and audit it against `anc_score_floor` and `anc_blocking_tiers`.
+
+`ci / Inputs` runs only when one of `jobs`, `test_runner`, `test_partitions`, or `anc_debug_audit` is set, and reports
+skipped otherwise; `ci / Tests` reports skipped unless `test_runner` is `nextest`.
+
+| Job id                       | Check name under a `ci:` caller                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `check`                      | `ci / Fmt, clippy, test`, or `ci / Fmt, clippy` under nextest                     |
+| `tests`                      | `ci / Tests`, or `ci / Tests (k/N)` with partitions                               |
+| `check-windows`              | `ci / Windows check`                                                              |
+| `audit`                      | `ci / Security audit (advisories)`, `ci / Security audit (bans licenses sources)` |
+| `package-check`              | `ci / Package check`                                                              |
+| `shellcheck`                 | `ci / Shellcheck`                                                                 |
+| `test-windows`, `test-macos` | `ci / Windows test`, `ci / macOS test`                                            |
+| `docs`                       | `ci / Doc build`                                                                  |
+| `msrv`                       | `ci / MSRV`                                                                       |
+| `completions`                | `ci / Completions freshness`                                                      |
+| `lint-stdio`                 | `ci / Output discipline`                                                          |
+| `workflow-concurrency`       | `ci / Workflow concurrency`                                                       |
+| `anc`                        | `ci / Agent-native audit`                                                         |
+| `changelog-check`            | `ci / Changelog`                                                                  |
 
 **Caller example:**
 
@@ -81,6 +118,27 @@ jobs:
       completions: true
       lint_stdio: true
       workflow_concurrency: true
+```
+
+**Caller example, scoped and warmed:** a scope job names the jobs a change needs, and push runs fill the caches.
+`if: ${{ !cancelled() }}` keeps the call running when the scope job fails, and `|| 'all'` then runs every job, since a
+failed job's outputs are empty.
+
+```yaml
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+jobs:
+  ci:
+    needs: scope
+    if: ${{ !cancelled() }}
+    uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      jobs: ${{ needs.scope.outputs.jobs || 'all' }} # a JSON array, such as '["check","tests"]'
+      warm_cache: ${{ github.event_name == 'push' }}
+      test_runner: nextest
+      nextest_version: 0.9.150
 ```
 
 ### `rust-change-scope.yml`

@@ -5,6 +5,11 @@
 # last three run scripts from the caller's checkout, because the rule each
 # enforces is the repository's own.
 #
+# Three inputs shape a run rather than add a check: `jobs` names the jobs to
+# run, `warm_cache` builds what each check compiles and saves the caches a pull
+# request restores, and `test_runner: nextest` moves the tests out of
+# `Fmt, clippy, test` into their own `Tests` job.
+#
 # Caller example:
 #   jobs:
 #     ci:
@@ -34,16 +39,56 @@ on:
         type: boolean
         required: false
         default: false
+      audit_ref:
+        description: "The ref the `Security audit` job checks out. Default empty: the commit the run is for, as every other job checks out. A scheduled run starts on the default branch, so a repository that releases from another branch names that branch here to audit the lockfile its next release ships."
+        type: string
+        required: false
+        default: ""
       windows_nasm:
         description: "Install NASM on the Windows jobs before cargo runs. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image."
         type: boolean
         required: false
         default: false
       docs_only:
-        description: "Skip every job. Default false. A caller sets it once it has established that nothing in the change can reach cargo, such as a pull request that edits only documentation no Rust source reads. A job skipped by its condition reports success, which a ruleset counts as passing, so required checks stay satisfied. The audit matrix skips its steps rather than itself: a matrix job skipped whole never expands, and its cells' checks would wait forever under their expanded names."
+        description: "Skip every job. Default false. A caller sets it once it has established that nothing in the change can reach cargo, such as a pull request that edits only documentation no Rust source reads. A job skipped by its condition reports success, which a ruleset counts as passing, so required checks stay satisfied. The audit and test matrices skip their steps rather than themselves: a matrix job skipped whole never expands, and its cells' checks would wait forever under their expanded names."
         type: boolean
         required: false
         default: false
+      jobs:
+        description: "The jobs to run: `all` (default), or a JSON array of job ids, such as `[\"check\",\"tests\"]`, where `[]` runs none. A job runs only when its own input turns it on, `docs_only` is false, and this names it. The ids are the keys under `jobs:` in this file. An id the workflow does not have fails the `Inputs` job, because the job it meant would skip, and a skipped required check reports success."
+        type: string
+        required: false
+        default: all
+      warm_cache:
+        description: "Build what each check compiles without running the check, and save each job's cache only when the job succeeds. Default false. Tests build with `--no-run`, clippy's step runs `cargo check` with the same flags, a check that only compiles runs as it is, and jobs that keep no Rust cache skip. Each job's name ends in ` (warm cache)`, so the run never reports a required check's name for a check that did not run. A caller passes it on push, so a pull request restores caches built by the same jobs, inputs, and environment."
+        type: boolean
+        required: false
+        default: false
+      test_runner:
+        description: "`cargo` (default) runs `cargo test` inside `Fmt, clippy, test`. `nextest` splits that job into `Fmt, clippy` and `Tests`, which runs `cargo nextest run --profile ci` and then `cargo test --doc`; the caller's `.config/nextest.toml` defines the `ci` profile."
+        type: string
+        required: false
+        default: cargo
+      nextest_version:
+        description: "The exact cargo-nextest release `Tests` installs, such as `0.9.150`. Required with `test_runner: nextest`."
+        type: string
+        required: false
+        default: ""
+      test_partitions:
+        description: "With `test_runner: nextest`, run `Tests` as this many `--partition hash:k/N` jobs, 1 (default) to 4. Each partition builds the test binaries itself, so a split pays only when running the tests outweighs a second build. The first partition also runs the doc tests."
+        type: number
+        required: false
+        default: 1
+      anc_debug_audit:
+        description: "With `test_runner: nextest` and `anc_version`, `Tests` also builds the debug `anc_bin` and audits it against `anc_score_floor` and `anc_blocking_tiers`. Default false. The release build and its size ceiling stay in `Agent-native audit`."
+        type: boolean
+        required: false
+        default: false
+      toolchain:
+        description: "The toolchain each job installs and makes rustup's default. Default `stable`. A rust-toolchain.toml or rust-toolchain file in the caller's repository outranks it: rustup installs the toolchain the file names, with the file's components."
+        type: string
+        required: false
+        default: stable
       cross_os_tests:
         description: "Run the `Windows test` and `macOS test` jobs: the `cargo test` that `Fmt, clippy, test` runs on Linux, on `windows-latest` and `macos-latest`. `Windows check` only compiles, so a path, file mode, rename, or lock that behaves differently off Linux passes it and fails here. Default false."
         type: boolean
@@ -128,49 +173,149 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
+# Each job's condition ends in `contains(fromJSON(inputs.jobs), '<its id>')`,
+# and `validate-inputs` holds the ids in KNOWN_JOBS;
+# scripts/check-rust-ci-jobs.sh fails when the two disagree.
+#
+# Swatinem/rust-cache keys each cache on the job id and on every CARGO*, RUST*,
+# CC*, CFLAGS*, CXX*, and CMAKE* variable in the job's environment. A warm run
+# matches a pull request's keys only while job ids and those variables stay the
+# same in both modes, so mode-specific values live in step `env` or in names
+# outside those prefixes.
 jobs:
+  # Runs only when a caller sets an input it checks, which no default does.
+  validate-inputs:
+    name: Inputs
+    if: inputs.jobs != 'all' || inputs.test_runner != 'cargo' || inputs.test_partitions != 1 || inputs.anc_debug_audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      KNOWN_JOBS: '["check","check-windows","audit","package-check","shellcheck","test-windows","test-macos","docs","msrv","completions","lint-stdio","workflow-concurrency","anc","tests","changelog-check"]'
+      JOBS: ${{ inputs.jobs }}
+      TEST_RUNNER: ${{ inputs.test_runner }}
+      NEXTEST_VERSION: ${{ inputs.nextest_version }}
+      TEST_PARTITIONS: ${{ inputs.test_partitions }}
+      ANC_DEBUG_AUDIT: ${{ inputs.anc_debug_audit }}
+      ANC_VERSION: ${{ inputs.anc_version }}
+      ANC_BIN: ${{ inputs.anc_bin }}
+    steps:
+      - name: Check the inputs
+        run: |
+          set -euo pipefail
+          status=0
+          fail() {
+            echo "::error title=rust-ci inputs::$1"
+            status=1
+          }
+          if [ "$JOBS" != all ]; then
+            if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$JOBS" > /dev/null 2>&1; then
+              fail "jobs is '${JOBS}'; expected all or a JSON array of job ids, such as [\"check\",\"tests\"]"
+            else
+              unknown="$(jq -r --argjson known "$KNOWN_JOBS" '[.[] | select(. as $id | $known | index($id) | not)] | unique | join(", ")' <<<"$JOBS")"
+              if [ -n "$unknown" ]; then
+                fail "jobs names ${unknown}, which this workflow does not have; its job ids are $(jq -r 'join(", ")' <<<"$KNOWN_JOBS")"
+              fi
+            fi
+          fi
+          case "$TEST_RUNNER" in
+            cargo | nextest) ;;
+            *) fail "test_runner is '${TEST_RUNNER}'; expected cargo or nextest" ;;
+          esac
+          if [ "$TEST_RUNNER" = nextest ] && [[ ! "$NEXTEST_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            fail "test_runner is nextest, so nextest_version must name an exact release such as 0.9.150; it is '${NEXTEST_VERSION}'"
+          fi
+          case "$TEST_PARTITIONS" in
+            1) ;;
+            2 | 3 | 4)
+              if [ "$TEST_RUNNER" != nextest ]; then
+                fail "test_partitions is ${TEST_PARTITIONS}, but only the nextest Tests job splits; set test_runner: nextest or leave test_partitions at 1"
+              fi
+              ;;
+            *) fail "test_partitions is '${TEST_PARTITIONS}'; expected 1 to 4" ;;
+          esac
+          if [ "$ANC_DEBUG_AUDIT" = true ]; then
+            if [ "$TEST_RUNNER" != nextest ]; then
+              fail "anc_debug_audit runs in the nextest Tests job; set test_runner: nextest"
+            fi
+            if [ -z "$ANC_VERSION" ] || [ -z "$ANC_BIN" ]; then
+              fail "anc_debug_audit needs anc_version and anc_bin"
+            fi
+          fi
+          exit "$status"
+
   check:
-    name: Fmt, clippy, test
-    if: ${{ !inputs.docs_only }}
+    name: ${{ format('{0}{1}', inputs.test_runner == 'nextest' && 'Fmt, clippy' || 'Fmt, clippy, test', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'check')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      TOOLCHAIN_COMPONENTS: rustfmt,clippy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Shared by every job that builds. RUN_STEPS is set only in the matrix
+      # jobs, which skip their steps rather than themselves.
+      - &install-rust
+        name: Install Rust
+        if: env.RUN_STEPS != 'false'
+        shell: bash
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        # rustup applies a rust-toolchain file over its default toolchain, so
+        # where the caller has one, the file's toolchain is the one installed.
+        run: |
+          set -euo pipefail
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            rustup toolchain install --no-self-update
+          else
+            rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+            rustup default "$TOOLCHAIN"
+          fi
+          if [ -n "${TOOLCHAIN_COMPONENTS:-}" ]; then
+            IFS=, read -ra components <<<"$TOOLCHAIN_COMPONENTS"
+            rustup component add "${components[@]}"
+          fi
+          rustc --version --verbose
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-on-failure: true
+          # Under nextest this job builds no tests, so its cache stays apart
+          # from the one `Tests` fills.
+          key: ${{ inputs.test_runner == 'nextest' && 'fmt-clippy' || '' }}
+          cache-on-failure: ${{ !inputs.warm_cache }}
 
       - name: Check formatting
+        if: ${{ !inputs.warm_cache }}
         run: cargo fmt --all --check
 
-      - name: Clippy
-        run: cargo clippy --all-targets
+      # Warm mode swaps the subcommand and keeps the flags, so the cache holds
+      # what clippy compiles.
+      - name: ${{ inputs.warm_cache && 'Build what clippy checks' || 'Clippy' }}
+        run: cargo ${{ inputs.warm_cache && 'check' || 'clippy' }} --all-targets
 
       - name: Tests
-        run: cargo test
+        if: inputs.test_runner != 'nextest'
+        run: cargo test${{ inputs.warm_cache && ' --no-run' || '' }}
 
   check-windows:
-    name: Windows check
-    if: ${{ !inputs.docs_only }}
+    name: ${{ format('Windows check{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'check-windows')) }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
+      # A warm run saves only on success, so a run that fails partway leaves no
+      # partial entry under the exact key, which no later run would refill.
+      - &rust-cache
+        name: Cache dependencies
+        if: env.RUN_STEPS != 'false'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          cache-on-failure: true
+          cache-on-failure: ${{ !inputs.warm_cache }}
 
       # `cargo check` still runs build scripts, so a C library in the tree is
       # compiled here. choco rather than a marketplace action: the shared
@@ -184,11 +329,14 @@ jobs:
           choco install nasm --no-progress --yes
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
+      # Compiling is the whole check, so warm mode runs it as it is.
       - name: Check (Windows)
         run: cargo check --all-targets
 
   audit:
     name: Security audit
+    # The audit keeps no Rust cache, so a warm run has nothing for it to build.
+    if: ${{ !inputs.warm_cache }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     strategy:
@@ -202,43 +350,46 @@ jobs:
     # opting into a red run. `advisories_blocking: true` additionally fails the
     # run itself.
     continue-on-error: ${{ matrix.checks == 'advisories' && !inputs.advisories_blocking }}
+    env:
+      RUN_STEPS: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'audit')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ !inputs.docs_only }}
+        if: env.RUN_STEPS == 'true'
+        with:
+          ref: ${{ inputs.audit_ref }}
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        if: ${{ !inputs.docs_only }}
+        if: env.RUN_STEPS == 'true'
         with:
           command: check ${{ matrix.checks }}
 
   package-check:
-    name: Package check
-    if: ${{ !inputs.docs_only }}
+    name: ${{ format('Package check{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'package-check')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
       # `--workspace` packages every member together and verifies them against
       # each other, which is the only way to dry-run a member whose path
       # dependency is not on crates.io yet. On a single root package it is the
       # same command as before.
       - name: List package contents
+        if: ${{ !inputs.warm_cache }}
         run: cargo package --list --workspace
 
+      # The dry run compiles each package and executes nothing, so warm mode
+      # runs it as it is.
       - name: Dry-run publish
         run: cargo publish --dry-run --workspace
 
   shellcheck:
     name: Shellcheck
-    if: ${{ !inputs.docs_only }}
+    if: ${{ !inputs.docs_only && !inputs.warm_cache && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'shellcheck')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -271,20 +422,16 @@ jobs:
   # Two jobs rather than a matrix: a matrix job skipped by `docs_only` never
   # expands, so a ruleset requiring the per-OS check would wait on it forever.
   test-windows:
-    name: Windows test
-    if: ${{ inputs.cross_os_tests && !inputs.docs_only }}
+    name: ${{ format('Windows test{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.cross_os_tests && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'test-windows')) }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
       - name: Install NASM
         if: inputs.windows_nasm
@@ -294,58 +441,50 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Tests (Windows)
-        run: cargo test
+        run: cargo test${{ inputs.warm_cache && ' --no-run' || '' }}
 
   test-macos:
-    name: macOS test
-    if: ${{ inputs.cross_os_tests && !inputs.docs_only }}
+    name: ${{ format('macOS test{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.cross_os_tests && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'test-macos')) }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
       - name: Tests (macOS)
-        run: cargo test
+        run: cargo test${{ inputs.warm_cache && ' --no-run' || '' }}
 
   docs:
-    name: Doc build
-    if: ${{ inputs.docs && !inputs.docs_only }}
+    name: ${{ format('Doc build{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.docs && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'docs')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
+      # Documenting is a build, so warm mode runs it as it is.
       - name: cargo doc
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
 
   msrv:
-    name: MSRV
-    if: ${{ inputs.msrv && !inputs.docs_only }}
+    name: ${{ format('MSRV{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.msrv && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'msrv')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
       - name: Install the declared rust-version
         id: msrv
@@ -363,10 +502,11 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: msrv-${{ steps.msrv.outputs.version }}
-          cache-on-failure: true
+          cache-on-failure: ${{ !inputs.warm_cache }}
 
       # A compile check, not a lint pass: an older compiler can warn where
       # the pinned one does not, and the clippy job already denies warnings.
+      # Compiling is the whole check, so warm mode runs it as it is.
       - name: cargo check on the declared rust-version
         env:
           MSRV: ${{ steps.msrv.outputs.version }}
@@ -374,8 +514,8 @@ jobs:
         run: cargo "+${MSRV}" check --workspace --all-features --locked
 
   completions:
-    name: Completions freshness
-    if: ${{ inputs.completions && !inputs.docs_only }}
+    name: ${{ format('Completions freshness{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.completions && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'completions')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
@@ -388,20 +528,19 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
+      # The caller's script owns the build it runs, so warm mode runs the
+      # script: its build is what the cache needs, and the comparison after it
+      # costs seconds.
       - name: Verify completions match the CLI definition
         run: bash scripts/generate-completions.sh --check
 
   lint-stdio:
     name: Output discipline
-    if: ${{ inputs.lint_stdio && !inputs.docs_only }}
+    if: ${{ inputs.lint_stdio && !inputs.docs_only && !inputs.warm_cache && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'lint-stdio')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -424,7 +563,7 @@ jobs:
 
   workflow-concurrency:
     name: Workflow concurrency
-    if: ${{ inputs.workflow_concurrency && !inputs.docs_only }}
+    if: ${{ inputs.workflow_concurrency && !inputs.docs_only && !inputs.warm_cache && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'workflow-concurrency')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -440,9 +579,11 @@ jobs:
 
   # The audit grades the source tree and the release binary together, so the
   # source rows (`code-unwrap` and its kin) count beside the behavioral ones.
+  # Warm mode builds the release binary and skips the audit. `Tests` shares
+  # the install, audit, and upload steps through RUN_AUDIT and ANC_SCORECARD.
   anc:
-    name: Agent-native audit
-    if: ${{ inputs.anc_version != '' && !inputs.docs_only }}
+    name: ${{ format('Agent-native audit{0}', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: ${{ inputs.anc_version != '' && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'anc')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
@@ -450,6 +591,8 @@ jobs:
       ANC_BIN: ${{ inputs.anc_bin }}
       ANC_SCORE_FLOOR: ${{ inputs.anc_score_floor }}
       ANC_BLOCKING_TIERS: ${{ inputs.anc_blocking_tiers }}
+      ANC_SCORECARD: anc-scorecard
+      RUN_AUDIT: ${{ !inputs.warm_cache }}
       SIZE_CEILING_BYTES: ${{ inputs.release_size_ceiling_bytes }}
     steps:
       - name: Check the inputs
@@ -476,20 +619,19 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - *install-rust
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          cache-on-failure: true
+      - *rust-cache
 
       - name: Install cargo-binstall
+        if: env.RUN_AUDIT == 'true'
         uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
       # A second binstall attempt covers a transient release-asset fetch
       # failure; a source build is the fallback after that.
-      - name: Install anc
+      - &install-anc
+        name: Install anc
+        if: env.RUN_AUDIT == 'true'
         run: |
           cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
             || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
@@ -505,7 +647,7 @@ jobs:
         run: cargo build --release --locked --bin "$ANC_BIN"
 
       - name: Release binary size ceiling
-        if: inputs.release_size_ceiling_bytes > 0
+        if: inputs.release_size_ceiling_bytes > 0 && env.RUN_AUDIT == 'true'
         run: |
           size="$(stat -c %s "target/release/${ANC_BIN}")"
           echo "target/release/${ANC_BIN} is ${size} bytes (ceiling ${SIZE_CEILING_BYTES})"
@@ -518,7 +660,9 @@ jobs:
       # failures, and 2 on failures, errors, or a usage error. The scorecard
       # decides among the three, and its shape check rejects a usage error's
       # output; any other exit means the audit never ran.
-      - name: anc audit
+      - &anc-audit
+        name: anc audit
+        if: env.RUN_AUDIT == 'true'
         run: |
           set -euo pipefail
           status=0
@@ -548,18 +692,114 @@ jobs:
             exit 1
           fi
 
-      - name: Upload the scorecard
-        if: always()
+      - &upload-scorecard
+        name: Upload the scorecard
+        if: always() && env.RUN_AUDIT == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: anc-scorecard
+          name: ${{ env.ANC_SCORECARD }}
           path: |
             anc-scorecard.json
             anc-rows.tsv
 
+  # The nextest half of `Fmt, clippy`. A matrix job skipped whole never
+  # expands, and its cells' required checks would wait forever, so `jobs` and
+  # `docs_only` skip its steps through RUN_STEPS instead. Every partition
+  # compiles the same test binaries under one cache key, so a warm run builds
+  # in the first partition alone.
+  tests:
+    name: ${{ format('Tests{0}{1}', inputs.test_partitions > 1 && format(' ({0}/{1})', matrix.partition, inputs.test_partitions) || '', inputs.warm_cache && ' (warm cache)' || '') }}
+    if: inputs.test_runner == 'nextest'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Expressions have no arithmetic, so the partition numbers come from a
+        # list indexed by the count.
+        partition: ${{ fromJSON('[[],[1],[1,2],[1,2,3],[1,2,3,4]]')[inputs.test_partitions] }}
+    env:
+      RUN_STEPS: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'tests')) && (!inputs.warm_cache || matrix.partition == 1) }}
+      NEXTEST_VERSION: ${{ inputs.nextest_version }}
+      PARTITION: ${{ inputs.test_partitions > 1 && format('hash:{0}/{1}', matrix.partition, inputs.test_partitions) || '' }}
+      WARM_CACHE: ${{ inputs.warm_cache }}
+      ANC_VERSION: ${{ inputs.anc_version }}
+      ANC_BIN: ${{ inputs.anc_bin }}
+      ANC_SCORE_FLOOR: ${{ inputs.anc_score_floor }}
+      ANC_BLOCKING_TIERS: ${{ inputs.anc_blocking_tiers }}
+      ANC_SCORECARD: anc-scorecard-debug
+      RUN_AUDIT: ${{ inputs.anc_debug_audit && !inputs.docs_only && !inputs.warm_cache && matrix.partition == 1 && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'tests')) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_STEPS == 'true'
+
+      - *install-rust
+
+      - *rust-cache
+
+      - name: Install cargo-binstall
+        if: env.RUN_STEPS == 'true' && !inputs.warm_cache
+        uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
+
+      - name: Install cargo-nextest
+        if: env.RUN_STEPS == 'true' && !inputs.warm_cache
+        run: |
+          set -euo pipefail
+          cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
+            || cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
+            || cargo install "cargo-nextest@${NEXTEST_VERSION}" --locked
+          installed="$(cargo nextest --version | head -n 1)"
+          echo "${installed} (pinned ${NEXTEST_VERSION})"
+          case "$installed" in
+            "cargo-nextest ${NEXTEST_VERSION}" | "cargo-nextest ${NEXTEST_VERSION} "*) ;;
+            *)
+              echo "::error title=Install cargo-nextest::found '${installed}', expected cargo-nextest ${NEXTEST_VERSION}"
+              exit 1
+              ;;
+          esac
+
+      # nextest compiles its binaries with `cargo test --no-run`, so the warm
+      # build fills the cache the real run restores.
+      - name: ${{ inputs.warm_cache && 'Build the tests' || 'Tests' }}
+        if: env.RUN_STEPS == 'true'
+        run: |
+          set -euo pipefail
+          if [ "$WARM_CACHE" = true ]; then
+            cargo test --no-run
+          elif [ -n "$PARTITION" ]; then
+            cargo nextest run --profile ci --partition "$PARTITION"
+          else
+            cargo nextest run --profile ci
+          fi
+
+      # nextest runs no doc tests. `cargo test --doc` fails on a package with
+      # no library, so it runs only where cargo test would find one.
+      - name: Doc tests
+        if: env.RUN_STEPS == 'true' && !inputs.warm_cache && matrix.partition == 1
+        run: |
+          set -euo pipefail
+          if cargo metadata --no-deps --format-version 1 | jq -e '
+            .workspace_default_members as $members
+            | [.packages[] | select(.id as $id | $members | index($id)) | .targets[] | select(.doctest)]
+            | length > 0' > /dev/null; then
+            cargo test --doc
+          else
+            echo "::notice title=Doc tests::no package cargo test selects has a library, so there are no doc tests"
+          fi
+
+      - *install-anc
+
+      - name: Build the debug binary
+        if: env.RUN_AUDIT == 'true'
+        run: cargo build --bin "$ANC_BIN"
+
+      - *anc-audit
+
+      - *upload-scorecard
+
   changelog-check:
     name: Changelog
-    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
+    if: ${{ !inputs.warm_cache && github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'changelog-check')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
