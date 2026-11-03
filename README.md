@@ -70,35 +70,39 @@ the toolchain the file names, with its components; any other caller builds on `t
 
 Three inputs change how a run goes rather than adding a check. Each defaults to the run described above.
 
-| Input                  | Default | What it does                                                                                                                                                                                                                                                                                |
-| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jobs` (string)        | `all`   | A JSON array of the job ids to run, such as `'["check","tests"]'`; `'[]'` runs none. A job runs only when its own input turns it on, `docs_only` is false, and `jobs` names it. An id the workflow does not have fails `ci / Inputs`, which a ruleset should require.                       |
-| `warm_cache` (bool)    | `false` | Builds what each check compiles without running it (`--no-run` tests, `cargo check` for clippy), and saves each cache only when its job succeeds. Each job's name gains a `(warm cache)` suffix; jobs that keep no Rust cache skip. Pass it on push, so pull requests restore those caches. |
-| `test_runner` (string) | `cargo` | `nextest` splits `Fmt, clippy, test` into `Fmt, clippy` and `Tests`. `Tests` installs cargo-nextest at `nextest_version` (required), then runs `cargo nextest run --profile ci` and `cargo test --doc`; the `ci` profile comes from the caller's `.config/nextest.toml`.                    |
+| Input                  | Default | What it does                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobs` (string)        | `all`   | A JSON array of the job ids to run, such as `'["fmt-clippy","tests"]'`; `'[]'` runs none. A job runs only when its own input turns it on, `docs_only` is false, and `jobs` names it. An id the workflow does not have fails `ci / Inputs`, which a ruleset should require.                                                               |
+| `warm_cache` (bool)    | `false` | Builds what each check compiles without running it (`--no-run` tests, `cargo check` for clippy), and saves each cache only when its job succeeds; jobs that keep no Rust cache skip. Pass it on push, from a caller job of its own (`warm:` below), so its checks report as `warm / <job>` and never under a required `ci / <job>` name. |
+| `test_runner` (string) | `cargo` | `nextest` runs `Fmt, clippy` and `Tests` in place of `Fmt, clippy, test`. `Tests` installs cargo-nextest at `nextest_version` (required), then runs `cargo nextest run --profile ci` and `cargo test --doc`; the `ci` profile comes from the caller's `.config/nextest.toml`.                                                            |
 
 With `test_runner: nextest`, `test_partitions` (number, 1 to 4, default 1) runs `Tests` as that many
-`--partition hash:k/N` jobs, the first of which also runs the doc tests, and `anc_debug_audit` (bool, default `false`)
-has `Tests` build the debug `anc_bin` and audit it against `anc_score_floor` and `anc_blocking_tiers`.
+`--partition hash:k/N` jobs, named `Tests (k/N)`, the first of which also runs the doc tests, and `anc_debug_audit`
+(bool, default `false`) has `Tests` build the debug `anc_bin` and audit it against `anc_score_floor` and
+`anc_blocking_tiers`.
 
 `ci / Inputs` runs only when one of `jobs`, `test_runner`, `test_partitions`, or `anc_debug_audit` is set, and reports
-skipped otherwise; `ci / Tests` reports skipped unless `test_runner` is `nextest`.
+skipped otherwise. Under the cargo runner `ci / Fmt, clippy` and `ci / Tests` report skipped, and under nextest
+`ci / Fmt, clippy, test` does. Every job name is literal, because GitHub reports a skipped job under its raw `name:`
+text.
 
-| Job id                       | Check name under a `ci:` caller                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| `check`                      | `ci / Fmt, clippy, test`, or `ci / Fmt, clippy` under nextest                     |
-| `tests`                      | `ci / Tests`, or `ci / Tests (k/N)` with partitions                               |
-| `check-windows`              | `ci / Windows check`                                                              |
-| `audit`                      | `ci / Security audit (advisories)`, `ci / Security audit (bans licenses sources)` |
-| `package-check`              | `ci / Package check`                                                              |
-| `shellcheck`                 | `ci / Shellcheck`                                                                 |
-| `test-windows`, `test-macos` | `ci / Windows test`, `ci / macOS test`                                            |
-| `docs`                       | `ci / Doc build`                                                                  |
-| `msrv`                       | `ci / MSRV`                                                                       |
-| `completions`                | `ci / Completions freshness`                                                      |
-| `lint-stdio`                 | `ci / Output discipline`                                                          |
-| `workflow-concurrency`       | `ci / Workflow concurrency`                                                       |
-| `anc`                        | `ci / Agent-native audit`                                                         |
-| `changelog-check`            | `ci / Changelog`                                                                  |
+| Job id                       | Check name under a `ci:` caller                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `check`                      | `ci / Fmt, clippy, test` (cargo runner)                                             |
+| `fmt-clippy`                 | `ci / Fmt, clippy` (nextest runner)                                                 |
+| `tests`                      | `ci / Tests (1/1)`, or `ci / Tests (k/N)` for each of N partitions (nextest runner) |
+| `check-windows`              | `ci / Windows check`                                                                |
+| `audit`                      | `ci / Security audit (advisories)`, `ci / Security audit (bans licenses sources)`   |
+| `package-check`              | `ci / Package check`                                                                |
+| `shellcheck`                 | `ci / Shellcheck`                                                                   |
+| `test-windows`, `test-macos` | `ci / Windows test`, `ci / macOS test`                                              |
+| `docs`                       | `ci / Doc build`                                                                    |
+| `msrv`                       | `ci / MSRV`                                                                         |
+| `completions`                | `ci / Completions freshness`                                                        |
+| `lint-stdio`                 | `ci / Output discipline`                                                            |
+| `workflow-concurrency`       | `ci / Workflow concurrency`                                                         |
+| `anc`                        | `ci / Agent-native audit`                                                           |
+| `changelog-check`            | `ci / Changelog`                                                                    |
 
 **Caller example:**
 
@@ -120,9 +124,9 @@ jobs:
       workflow_concurrency: true
 ```
 
-**Caller example, scoped and warmed:** a scope job names the jobs a change needs, and push runs fill the caches.
-`if: ${{ !cancelled() }}` keeps the call running when the scope job fails, and `|| 'all'` then runs every job, since a
-failed job's outputs are empty.
+**Caller example, scoped and warmed:** a scope job names the jobs a change needs, and push runs fill the caches from a
+caller job of their own. `if: ${{ !cancelled() }}` keeps the call running when the scope job fails, and `|| 'all'` then
+runs every job, since a failed job's outputs are empty.
 
 ```yaml
 on:
@@ -132,11 +136,17 @@ on:
 jobs:
   ci:
     needs: scope
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
     with:
-      jobs: ${{ needs.scope.outputs.jobs || 'all' }} # a JSON array, such as '["check","tests"]'
-      warm_cache: ${{ github.event_name == 'push' }}
+      jobs: ${{ needs.scope.outputs.jobs || 'all' }} # a JSON array, such as '["fmt-clippy","tests"]'
+      test_runner: nextest
+      nextest_version: 0.9.150
+  warm:
+    if: github.event_name == 'push'
+    uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      warm_cache: true
       test_runner: nextest
       nextest_version: 0.9.150
 ```
