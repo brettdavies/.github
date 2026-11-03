@@ -558,10 +558,12 @@ jobs:
       - name: Verify completions match the CLI definition
         run: bash scripts/generate-completions.sh --check
 
+  # Noble's apt ripgrep is built with PCRE2 and jammy's is not, so a script
+  # that searches with `--pcre2` gets an error from rg on ubuntu-22.04.
   lint-stdio:
     name: Output discipline
     if: ${{ inputs.lint_stdio && !inputs.docs_only && !inputs.warm_cache && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'lint-stdio')) }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
