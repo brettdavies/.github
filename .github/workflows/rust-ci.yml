@@ -55,7 +55,7 @@ on:
         required: false
         default: false
       jobs:
-        description: "The jobs to run: `all` (default), or a JSON array of job ids, such as `[\"check\",\"tests\"]`, where `[]` runs none. A job runs only when its own input turns it on, `docs_only` is false, and this names it. The ids are the keys under `jobs:` in this file. An id the workflow does not have fails the `Inputs` job, because the job it meant would skip, and a skipped required check reports success."
+        description: "The jobs to run: `all` (default), or a JSON array of job ids, such as `[\"check\",\"docs\"]`, where `[]` runs none. A job runs only when its own input turns it on, `docs_only` is false, and this names it. The ids are the keys under `jobs:` in this file. An id the workflow does not have fails the `Inputs` job, because the job it meant would skip, and a skipped required check reports success."
         type: string
         required: false
         default: all
@@ -211,7 +211,7 @@ jobs:
           }
           if [ "$JOBS" != all ]; then
             if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$JOBS" > /dev/null 2>&1; then
-              fail "jobs is '${JOBS}'; expected all or a JSON array of job ids, such as [\"check\",\"tests\"]"
+              fail "jobs is '${JOBS}'; expected all or a JSON array of job ids, such as [\"check\",\"docs\"]"
             else
               unknown="$(jq -r --argjson known "$KNOWN_JOBS" '[.[] | select(. as $id | $known | index($id) | not)] | unique | join(", ")' <<<"$JOBS")"
               if [ -n "$unknown" ]; then
