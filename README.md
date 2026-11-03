@@ -76,6 +76,13 @@ Three inputs change how a run goes rather than adding a check. Each defaults to 
 | `warm_cache` (bool)    | `false` | Builds what each check compiles without running it (`--no-run` tests, `cargo check` for clippy), and saves each cache only when its job succeeds; jobs that keep no Rust cache skip. Pass it on push, from a caller job of its own (`warm:` below), so its checks report as `warm / <job>` and never under a required `ci / <job>` name. |
 | `test_runner` (string) | `cargo` | `nextest` runs `Fmt, clippy` and `Tests` in place of `Fmt, clippy, test`. `Tests` installs cargo-nextest at `nextest_version` (required), then runs `cargo nextest run --profile ci` and `cargo test --doc`; the `ci` profile comes from the caller's `.config/nextest.toml`.                                                            |
 
+The `ci` profile can be as small as this, in the caller's `.config/nextest.toml`:
+
+```toml
+[profile.ci]
+fail-fast = false
+```
+
 With `test_runner: nextest`, `test_partitions` (number, 1 to 4, default 1) runs `Tests` as that many
 `--partition hash:k/N` jobs, named `Tests (k/N)`, the first of which also runs the doc tests, and `anc_debug_audit`
 (bool, default `false`) has `Tests` build the debug `anc_bin` and audit it against `anc_score_floor` and
