@@ -19,6 +19,9 @@
 # Build matrix is 7 targets: x86_64/aarch64 linux-gnu, x86_64/aarch64 linux-musl,
 # x86_64/aarch64 darwin, x86_64 windows-msvc. The two musl rows soft-fail by
 # default; set linux_musl_required: true once a consumer has verified its build.
+# Both darwin rows build on macos-15, x86_64 cross-built beside arm64, for the
+# macOS release `macos_deployment_target` names (15.0 unless set); a build
+# fails when any object it links declares a newer one.
 # Set linux_musl_verify_alpine: true to additionally exec the x86_64 musl
 # binary inside alpine:latest as a belt-and-suspenders compatibility check.
 #
@@ -71,6 +74,11 @@ on:
         type: boolean
         required: false
         default: false
+      macos_deployment_target:
+        description: "The oldest macOS the darwin binaries run on, set as MACOSX_DEPLOYMENT_TARGET for the whole build so Rust and the C code a build script compiles declare the same minimum. Default `15.0`. The build fails when the binary or any `.a` or `.o` under its build directory declares a newer one."
+        type: string
+        required: false
+        default: "15.0"
       attest:
         description: "Attest the release. Default false. When true, every archive the build jobs produced and `sha256sum.txt` get a build-provenance attestation and a CycloneDX SBOM of the binary is attested against the archives, all before anything is published; a failed attestation publishes nothing, and the Homebrew dispatch waits for every published file to verify. The caller then grants `attestations: write` beside `id-token: write`."
         type: boolean
@@ -213,10 +221,10 @@ jobs:
             target: aarch64-unknown-linux-musl
             cross: true
             soft_fail: true
-          - os: macos-26
+          - os: macos-15
             target: aarch64-apple-darwin
             soft_fail: false
-          - os: macos-latest
+          - os: macos-15
             target: x86_64-apple-darwin
             soft_fail: false
           - os: windows-latest
@@ -232,6 +240,10 @@ jobs:
     # every non-musl row above — together they make the expression
     # always-boolean and make every row's stance grep-able.
     continue-on-error: ${{ matrix.soft_fail == true && !inputs.linux_musl_required }}
+    # Set for the job, so cargo, rustc, and every build script's C compiler
+    # see one value, and empty off darwin, so no other row's cache key moves.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.target, 'apple-darwin') && inputs.macos_deployment_target || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -252,10 +264,13 @@ jobs:
         if: matrix.cross != true
         run: rustup target add ${{ matrix.target }}
 
+      # The deployment target joins the key, so a darwin build never restores
+      # C objects compiled for another one.
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
+          env-vars: MACOSX_DEPLOYMENT_TARGET
 
       - name: Install cross
         if: matrix.cross
@@ -299,6 +314,81 @@ jobs:
             BUILD_CMD="cross"
           fi
           $BUILD_CMD build --release --locked --target "$TARGET"
+
+      # rustc writes the deployment target into the binary, but a build
+      # script's C compiler targets the runner's SDK unless
+      # MACOSX_DEPLOYMENT_TARGET reaches it too. An object built for a newer
+      # macOS links without a warning, and the binary then fails to load on
+      # the older macOS the release claims. scripts/check-release-matrix-parity.sh
+      # holds this step to the same text in both release workflows.
+      - name: Check the macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$MACOSX_DEPLOYMENT_TARGET" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error title=macOS deployment target::macos_deployment_target is '${MACOSX_DEPLOYMENT_TARGET}'; expected a version such as 15.0"
+            exit 1
+          fi
+          # True when version $1 is newer than version $2.
+          newer() {
+            awk -v a="$1" -v b="$2" 'BEGIN {
+              n = split(a, x, "."); m = split(b, y, ".")
+              for (i = 1; i <= 3; i++) {
+                p = (i <= n) ? x[i] + 0 : 0; q = (i <= m) ? y[i] + 0 : 0
+                if (p != q) exit !(p > q)
+              }
+              exit 1
+            }'
+          }
+          dir="target/${TARGET}/release"
+          {
+            find "$dir" -maxdepth 1 -type f -perm -u+x
+            # A build whose dependencies run no build script has no build/,
+            # and a failed find would end the step under pipefail.
+            [ ! -d "$dir/build" ] || find "$dir/build" -type f \( -name '*.a' -o -name '*.o' \)
+          } 2>/dev/null | sort > macos-objects.txt
+          # One line per object: its path and the macOS it declares, from
+          # LC_BUILD_VERSION or, in older objects, LC_VERSION_MIN_MACOSX. An
+          # archive lists each member as `archive.a(member.o)`.
+          while IFS= read -r f; do otool -l "$f" 2>/dev/null || true; done < macos-objects.txt \
+            | awk '
+                /^[^[:space:]].*:$/ { object = substr($0, 1, length($0) - 1); command = ""; next }
+                $1 == "cmd" { command = $2; next }
+                (command == "LC_BUILD_VERSION" && $1 == "minos") || (command == "LC_VERSION_MIN_MACOSX" && $1 == "version") {
+                  print object "\t" $2; command = ""
+                }' > macos-minos.tsv
+          if [ ! -s macos-minos.tsv ]; then
+            echo "::error title=macOS deployment target::no Mach-O object under ${dir} declares a macOS version"
+            exit 1
+          fi
+          echo "Objects by declared macOS version on ${TARGET} (deployment target ${MACOSX_DEPLOYMENT_TARGET}):"
+          cut -f 2 macos-minos.tsv | sort | uniq -c
+          find "$dir" -maxdepth 1 -type f -perm -u+x | while read -r binary; do
+            awk -F '\t' -v b="$binary" '$1 == b { print b " declares macOS " $2 }' macos-minos.tsv
+          done
+          # Each file goes to the log rather than an annotation: a step shows
+          # ten annotations, and the summary below carries the fix.
+          bad=0
+          first=""
+          newest="$MACOSX_DEPLOYMENT_TARGET"
+          while IFS=$'\t' read -r object minos; do
+            if newer "$minos" "$MACOSX_DEPLOYMENT_TARGET"; then
+              echo "${object} declares macOS ${minos}, newer than ${MACOSX_DEPLOYMENT_TARGET}, on ${TARGET}"
+              bad=$((bad + 1))
+              first="${first:-${object} (macOS ${minos})}"
+              if newer "$minos" "$newest"; then newest="$minos"; fi
+            fi
+          done < macos-minos.tsv
+          # The job already exports the variable, so a newer object comes from
+          # a build step that ignores it, or from a prebuilt library: the fix
+          # names both ways out.
+          if [ "$bad" -gt 0 ]; then
+            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}. Nothing was published. To ship macOS ${newest} as the minimum, raise macos_deployment_target to ${newest}. To keep ${MACOSX_DEPLOYMENT_TARGET}, make the crate that built them read the variable: set MACOSX_DEPLOYMENT_TARGET for the whole build"
+            exit 1
+          fi
 
       # Soft-fail rows surface their failure as a job-summary warning so the
       # omitted artifact is loud in the run UI even though the release proceeds.
@@ -584,8 +674,10 @@ jobs:
       # Published, never a draft: `brew pr-pull` finds the release through
       # GET /repos/{owner}/{repo}/releases/tags/{tag}, which returns no drafts,
       # and on that 404 creates a second release for the same tag. make_latest
-      # stays false until rust-finalize-release.yml runs after the bottles
-      # upload, so the repository's latest release always has them.
+      # stays false until the tap publishes the formula and dispatches
+      # rust-finalize-release.yml. For a source-built formula that waits for
+      # the bottles to upload, so the repository's latest release always has
+      # them; a prebuilt formula installs this release's archives and has none.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -614,8 +706,8 @@ jobs:
       SIGNER: brettdavies/.github/.github/workflows/rust-release.yml
     steps:
       # Fetched by the names the release's own checksum file lists. Assets
-      # added to the release later (Homebrew bottles) are not in that file,
-      # so a re-run checks the same set as the first run.
+      # added to the release later (a source-built formula's Homebrew bottles)
+      # are not in that file, so a re-run checks the same set as the first run.
       - name: Download the published archives
         run: |
           mkdir release

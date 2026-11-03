@@ -3,15 +3,18 @@
 #
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag.
+# runner, and cross flag, or when their `Check the macOS deployment target`
+# steps differ in any line.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
 # release branch ever builds, and its first failure is a failed release. No run
-# fails on a missing row, so nothing else would report the gap.
+# fails on a missing row, so nothing else would report the gap. The same holds
+# for the deployment-target step: a check that reads objects differently from
+# the release passes a build the release then fails, or the reverse.
 #
-# Exit codes: 0 = both matrices hold the same rows, 1 = they differ (the rows
-# on one side only are printed), 2 = a matrix could not be read.
+# Exit codes: 0 = both matrices hold the same rows and the same step, 1 = they
+# differ (the difference is printed), 2 = a matrix or the step could not be read.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -65,9 +68,37 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-if [ "$release_rows" = "$check_rows" ]; then
-  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release"
+# The step's lines, from its `- name:` line to the line before the next step,
+# comment, or job.
+minos_step() {
+  awk '
+    /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
+    on && (/^      - / || /^  [A-Za-z_-]+:/ || /^      #/) { exit }
+    on { print }
+  ' "$1"
+}
+release_step=$(minos_step "$release")
+check_step=$(minos_step "$check")
+for wf in "$release" "$check"; do
+  if [ -z "$(minos_step "$wf")" ]; then
+    echo "FAIL: no \`Check the macOS deployment target\` step in $wf" >&2
+    exit 2
+  fi
+done
+
+if [ "$release_rows" = "$check_rows" ] && [ "$release_step" = "$check_step" ]; then
+  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same deployment-target step"
   exit 0
+fi
+
+if [ "$release_step" != "$check_step" ]; then
+  echo "FAIL: the \`Check the macOS deployment target\` steps differ (< $release, > $check)" >&2
+  diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
+  if [ "$release_rows" = "$check_rows" ]; then
+    echo "" >&2
+    echo "Give both workflows the same step text." >&2
+    exit 1
+  fi
 fi
 
 echo "FAIL: the build matrices differ (target, runner, cross)" >&2

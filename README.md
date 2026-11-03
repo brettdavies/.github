@@ -35,33 +35,81 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
 
 CI for Rust CLI tools: fmt, clippy, test, security audit, package check.
 
-|                                 |                                                                                                                                                                                                                                        |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                           |
-| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `windows_nasm` (bool, optional, default `false`; NASM on the Windows jobs), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing) |
-| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                       |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets)                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Inputs**                      | `advisories_blocking` (bool, optional, default `false`), `audit_ref` (string, optional, default empty; the ref the audit checks out), `windows_nasm` (bool, optional, default `false`; NASM on the Windows jobs), `docs_only` (bool, optional, default `false`; every job reports skipped, which counts as passing), `toolchain` (string, optional, default `stable`; a rust-toolchain file in the caller's repository outranks it), and the run-shaping inputs below |
+| **Required caller permissions** | `contents: read`                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 Opt-in jobs, each off by default. A job that is off reports skipped, which a ruleset counts as passing. Three of them
 run a script from the caller's checkout, because the rule it enforces belongs to the repository.
 
-| Input                                 | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
-| ------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cross_os_tests` (bool)               | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
-| `docs` (bool)                         | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
-| `msrv` (bool)                         | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
-| `completions` (bool)                  | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
-| `lint_stdio` (bool)                   | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
-| `workflow_concurrency` (bool)         | `ci / Workflow concurrency`            | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
-| `anc_version` (string)                | `ci / Agent-native audit`              | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
+| Input                         | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
+| ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
+| `docs` (bool)                 | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
+| `msrv` (bool)                 | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
+| `completions` (bool)          | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
+| `lint_stdio` (bool)           | `ci / Output discipline`               | `scripts/lint-stdio.sh`, with ripgrep installed                                                                |
+| `workflow_concurrency` (bool) | `ci / Workflow concurrency`            | `scripts/check-workflow-concurrency.sh`, vendored from github-repo-setup                                       |
+| `anc_version` (string)        | `ci / Agent-native audit`              | `anc audit . --bin <anc_bin>` at that anc release, against the source tree and the release binary              |
 
 The audit's other inputs: `anc_bin` (string, required with `anc_version`), `anc_score_floor` (number, default `0`; fails
 below that `badge.score_pct`), `anc_blocking_tiers` (`must` by default, or `any` to fail on every `fail` or `error`
 row), and `release_size_ceiling_bytes` (number, default `0` for no ceiling). The scorecard uploads as the
-`anc-scorecard` artifact on every run.
+`anc-scorecard` artifact whenever the audit runs.
 
-Every job builds the `dev` and `test` profiles with line-tables-only debug info and no incremental artifacts, set
-in the workflow's own `env`. A caller's workflow `env` never reaches a called workflow's jobs, so a caller need not
-set either for this workflow; `line-tables-only` needs Rust 1.71 or later.
+Every job builds the `dev` and `test` profiles with line-tables-only debug info and no incremental artifacts, set in the
+workflow's own `env`. A caller's workflow `env` never reaches a called workflow's jobs, so a caller need not set either
+for this workflow; `line-tables-only` needs Rust 1.71 or later.
+
+Every job installs its toolchain with `rustup`. A caller with a `rust-toolchain.toml` or `rust-toolchain` file builds on
+the toolchain the file names, with its components; any other caller builds on `toolchain`.
+
+#### Choosing, warming, and splitting jobs
+
+Three inputs change how a run goes rather than adding a check. Each defaults to the run described above.
+
+| Input                  | Default | What it does                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobs` (string)        | `all`   | A JSON array of the job ids to run, such as `'["fmt-clippy","tests"]'`; `'[]'` runs none. A job runs only when its own input turns it on, `docs_only` is false, and `jobs` names it. An id the workflow does not have fails `ci / Inputs`, which a ruleset should require.                                                               |
+| `warm_cache` (bool)    | `false` | Builds what each check compiles without running it (`--no-run` tests, `cargo check` for clippy), and saves each cache only when its job succeeds; jobs that keep no Rust cache skip. Pass it on push, from a caller job of its own (`warm:` below), so its checks report as `warm / <job>` and never under a required `ci / <job>` name. |
+| `test_runner` (string) | `cargo` | `nextest` runs `Fmt, clippy` and `Tests` in place of `Fmt, clippy, test`. `Tests` installs cargo-nextest at `nextest_version` (required), then runs `cargo nextest run --profile ci` and `cargo test --doc`; the `ci` profile comes from the caller's `.config/nextest.toml`.                                                            |
+
+The `ci` profile can be as small as this, in the caller's `.config/nextest.toml`:
+
+```toml
+[profile.ci]
+fail-fast = false
+```
+
+With `test_runner: nextest`, `test_partitions` (number, 1 to 4, default 1) runs `Tests` as that many
+`--partition hash:k/N` jobs, named `Tests (k/N)`, the first of which also runs the doc tests, and `anc_debug_audit`
+(bool, default `false`) has `Tests` build the debug `anc_bin` and audit it against `anc_score_floor` and
+`anc_blocking_tiers`.
+
+`ci / Inputs` runs only when one of `jobs`, `test_runner`, `test_partitions`, or `anc_debug_audit` is set, and reports
+skipped otherwise. Under the cargo runner `ci / Fmt, clippy` and `ci / Tests` report skipped, and under nextest
+`ci / Fmt, clippy, test` does. Every job name is literal, because GitHub reports a skipped job under its raw `name:`
+text.
+
+| Job id                       | Check name under a `ci:` caller                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `check`                      | `ci / Fmt, clippy, test` (cargo runner)                                             |
+| `fmt-clippy`                 | `ci / Fmt, clippy` (nextest runner)                                                 |
+| `tests`                      | `ci / Tests (1/1)`, or `ci / Tests (k/N)` for each of N partitions (nextest runner) |
+| `check-windows`              | `ci / Windows check`                                                                |
+| `audit`                      | `ci / Security audit (advisories)`, `ci / Security audit (bans licenses sources)`   |
+| `package-check`              | `ci / Package check`                                                                |
+| `shellcheck`                 | `ci / Shellcheck`                                                                   |
+| `test-windows`, `test-macos` | `ci / Windows test`, `ci / macOS test`                                              |
+| `docs`                       | `ci / Doc build`                                                                    |
+| `msrv`                       | `ci / MSRV`                                                                         |
+| `completions`                | `ci / Completions freshness`                                                        |
+| `lint-stdio`                 | `ci / Output discipline`                                                            |
+| `workflow-concurrency`       | `ci / Workflow concurrency`                                                         |
+| `anc`                        | `ci / Agent-native audit`                                                           |
+| `changelog-check`            | `ci / Changelog`                                                                    |
 
 **Caller example:**
 
@@ -81,6 +129,33 @@ jobs:
       completions: true
       lint_stdio: true
       workflow_concurrency: true
+```
+
+**Caller example, scoped and warmed:** a scope job names the jobs a change needs, and push runs fill the caches from a
+caller job of their own. `if: ${{ !cancelled() }}` keeps the call running when the scope job fails, and `|| 'all'` then
+runs every job, since a failed job's outputs are empty.
+
+```yaml
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+jobs:
+  ci:
+    needs: scope
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      jobs: ${{ needs.scope.outputs.jobs || 'all' }} # a JSON array, such as '["fmt-clippy","tests"]'
+      test_runner: nextest
+      nextest_version: 0.9.150
+  warm:
+    if: github.event_name == 'push'
+    uses: brettdavies/.github/.github/workflows/rust-ci.yml@main
+    with:
+      warm_cache: true
+      test_runner: nextest
+      nextest_version: 0.9.150
 ```
 
 ### `rust-change-scope.yml`
@@ -157,8 +232,15 @@ Homebrew dispatch.
 
 The release is published rather than drafted because `brew pr-pull` finds it by tag through
 `GET /repos/{owner}/{repo}/releases/tags/{tag}`, which returns no drafts, and on that 404 creates a second release for
-the same tag. It stays unmarked as latest until `rust-finalize-release.yml` runs after the bottles upload, so the
-repository's latest release always has them.
+the same tag. It stays unmarked as latest until the tap publishes the formula and dispatches
+`rust-finalize-release.yml`: after the bottles upload for a source-built formula, so the repository's latest release
+always has them, and at once for a prebuilt formula, which installs the release's own archives and has no bottles.
+
+Both darwin rows build on `macos-15`, `x86_64-apple-darwin` cross-built beside the native arm64 row.
+`macos_deployment_target` (default `15.0`) is set as `MACOSX_DEPLOYMENT_TARGET` for the whole build, so the C code a
+build script compiles declares the same oldest macOS as the Rust code. After each darwin build, a step reads the macOS
+version the binary and every `.a` and `.o` under its build directory declare, and fails, naming each file, when one is
+newer than the deployment target.
 
 With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
 CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
@@ -172,12 +254,12 @@ A caller whose Homebrew formula installs the release's archives, rather than bui
 `attest: true`. `brettdavies/homebrew-tap` verifies each archive such a formula names against its attestation, with this
 workflow as the signer, before it pins the checksum, and stops the formula bump when an archive has none.
 
-|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives), `macos_deployment_target` (string, optional, default `15.0`; the oldest macOS the darwin binaries run on) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 **Caller example:**
 
@@ -208,15 +290,16 @@ A caller runs it when its dependency graph or toolchain pin changes and on every
 Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
 passes `linux_musl_required: true`, a red row here means the release would fail on the same row.
 
-The matrix holds the same rows as the release build's. `scripts/check-release-matrix-parity.sh` compares the two by
-target, runner, and cross flag, and fails this repo's lint run when they differ.
+The matrix holds the same rows as the release build's, and the same deployment-target check on the darwin rows.
+`scripts/check-release-matrix-parity.sh` compares the two by target, runner, and cross flag, and the check step line by
+line, and fails this repo's lint run when they differ.
 
-|                                 |                  |
-| ------------------------------- | ---------------- |
-| **Trigger**                     | `workflow_call`  |
-| **Inputs**                      | None             |
-| **Secrets**                     | None             |
-| **Required caller permissions** | `contents: read` |
+|                                 |                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                              |
+| **Inputs**                      | `macos_deployment_target` (string, optional, default `15.0`), as `rust-release.yml` takes it |
+| **Secrets**                     | None                                                                                         |
+| **Required caller permissions** | `contents: read`                                                                             |
 
 Triggers, path filters, and the concurrency group belong to the caller, because which paths can break a build differs
 per repo.
@@ -277,8 +360,9 @@ jobs:
 
 ### `rust-finalize-release.yml`
 
-Marks the tag's GitHub Release as the repository's latest once Homebrew bottles are uploaded, publishing it first if it
-is still a draft.
+Marks the tag's GitHub Release as the repository's latest once the tap has published the formula, publishing it first if
+it is still a draft. The tap dispatches it after the bottles upload for a source-built formula; a prebuilt formula
+installs the release's own archives and has no bottles to wait for.
 
 |                                 |                                                       |
 | ------------------------------- | ----------------------------------------------------- |
