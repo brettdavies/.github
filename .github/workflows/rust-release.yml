@@ -362,20 +362,24 @@ jobs:
             echo "::error title=macOS deployment target::no Mach-O object under ${dir} declares a macOS version"
             exit 1
           fi
-          bad=0
-          while IFS=$'\t' read -r object minos; do
-            if newer "$minos" "$MACOSX_DEPLOYMENT_TARGET"; then
-              echo "::error title=macOS deployment target::${object} declares macOS ${minos}, newer than ${MACOSX_DEPLOYMENT_TARGET}, on ${TARGET}"
-              bad=$((bad + 1))
-            fi
-          done < macos-minos.tsv
           echo "Objects by declared macOS version on ${TARGET} (deployment target ${MACOSX_DEPLOYMENT_TARGET}):"
           cut -f 2 macos-minos.tsv | sort | uniq -c
           find "$dir" -maxdepth 1 -type f -perm -u+x | while read -r binary; do
             awk -F '\t' -v b="$binary" '$1 == b { print b " declares macOS " $2 }' macos-minos.tsv
           done
+          # Each file goes to the log rather than an annotation: a step shows
+          # ten annotations, and the summary below carries the fix.
+          bad=0
+          first=""
+          while IFS=$'\t' read -r object minos; do
+            if newer "$minos" "$MACOSX_DEPLOYMENT_TARGET"; then
+              echo "${object} declares macOS ${minos}, newer than ${MACOSX_DEPLOYMENT_TARGET}, on ${TARGET}"
+              bad=$((bad + 1))
+              first="${first:-${object} (macOS ${minos})}"
+            fi
+          done < macos-minos.tsv
           if [ "$bad" -gt 0 ]; then
-            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}; set MACOSX_DEPLOYMENT_TARGET for the whole build"
+            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}, listed above in this step's log, the first ${first}; set MACOSX_DEPLOYMENT_TARGET for the whole build"
             exit 1
           fi
 
