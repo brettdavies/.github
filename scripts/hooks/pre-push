@@ -59,8 +59,9 @@ bash scripts/check-release-matrix-parity.sh
 
 if command -v yq >/dev/null 2>&1; then
   bash scripts/check-search-presence-workflow.sh
+  bash scripts/check-rust-ci-jobs.sh
 else
-  echo "pre-push: yq not installed; skipping the search-presence workflow contract"
+  echo "pre-push: yq not installed; skipping the search-presence workflow contract and the rust-ci job-id check"
 fi
 
 if command -v python3 >/dev/null 2>&1 && command -v yq >/dev/null 2>&1; then
