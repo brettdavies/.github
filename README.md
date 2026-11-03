@@ -225,8 +225,15 @@ Homebrew dispatch.
 
 The release is published rather than drafted because `brew pr-pull` finds it by tag through
 `GET /repos/{owner}/{repo}/releases/tags/{tag}`, which returns no drafts, and on that 404 creates a second release for
-the same tag. It stays unmarked as latest until `rust-finalize-release.yml` runs after the bottles upload, so the
-repository's latest release always has them.
+the same tag. It stays unmarked as latest until the tap publishes the formula and dispatches
+`rust-finalize-release.yml`: after the bottles upload for a source-built formula, so the repository's latest release
+always has them, and at once for a prebuilt formula, which installs the release's own archives and has no bottles.
+
+Both darwin rows build on `macos-15`, `x86_64-apple-darwin` cross-built beside the native arm64 row.
+`macos_deployment_target` (default `15.0`) is set as `MACOSX_DEPLOYMENT_TARGET` for the whole build, so the C code a
+build script compiles declares the same oldest macOS as the Rust code. After each darwin build, a step reads the macOS
+version the binary and every `.a` and `.o` under its build directory declare, and fails, naming each file, when one is
+newer than the deployment target.
 
 With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
 CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
@@ -240,12 +247,12 @@ A caller whose Homebrew formula installs the release's archives, rather than bui
 `attest: true`. `brettdavies/homebrew-tap` verifies each archive such a formula names against its attestation, with this
 workflow as the signer, before it pins the checksum, and stops the formula bump when an archive has none.
 
-|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives), `macos_deployment_target` (string, optional, default `15.0`; the oldest macOS the darwin binaries run on) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 **Caller example:**
 
@@ -276,15 +283,16 @@ A caller runs it when its dependency graph or toolchain pin changes and on every
 Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
 passes `linux_musl_required: true`, a red row here means the release would fail on the same row.
 
-The matrix holds the same rows as the release build's. `scripts/check-release-matrix-parity.sh` compares the two by
-target, runner, and cross flag, and fails this repo's lint run when they differ.
+The matrix holds the same rows as the release build's, and the same deployment-target check on the darwin rows.
+`scripts/check-release-matrix-parity.sh` compares the two by target, runner, and cross flag, and the check step line by
+line, and fails this repo's lint run when they differ.
 
-|                                 |                  |
-| ------------------------------- | ---------------- |
-| **Trigger**                     | `workflow_call`  |
-| **Inputs**                      | None             |
-| **Secrets**                     | None             |
-| **Required caller permissions** | `contents: read` |
+|                                 |                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                              |
+| **Inputs**                      | `macos_deployment_target` (string, optional, default `15.0`), as `rust-release.yml` takes it |
+| **Secrets**                     | None                                                                                         |
+| **Required caller permissions** | `contents: read`                                                                             |
 
 Triggers, path filters, and the concurrency group belong to the caller, because which paths can break a build differs
 per repo.
@@ -345,8 +353,9 @@ jobs:
 
 ### `rust-finalize-release.yml`
 
-Marks the tag's GitHub Release as the repository's latest once Homebrew bottles are uploaded, publishing it first if it
-is still a draft.
+Marks the tag's GitHub Release as the repository's latest once the tap has published the formula, publishing it first if
+it is still a draft. The tap dispatches it after the bottles upload for a source-built formula; a prebuilt formula
+installs the release's own archives and has no bottles to wait for.
 
 |                                 |                                                       |
 | ------------------------------- | ----------------------------------------------------- |

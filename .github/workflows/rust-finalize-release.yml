@@ -4,8 +4,10 @@
 #
 # Idempotent: succeeds whether the release is still a draft or already published.
 # rust-release.yml creates the release published with make_latest: false, so
-# this workflow's work is make_latest=true once the bottles are uploaded; a
-# release still in draft is published as well.
+# this workflow's work is make_latest=true once the tap has published the
+# formula; a release still in draft is published as well. The tap dispatches it
+# after the bottles upload for a source-built formula; a prebuilt formula
+# installs the release's own archives and has no bottles to wait for.
 #
 # Caller example:
 #   jobs:

@@ -28,6 +28,12 @@ name: Rust Release Matrix Check
 
 on:
   workflow_call:
+    inputs:
+      macos_deployment_target:
+        description: "The oldest macOS the darwin binaries run on, as `rust-release.yml` takes it. Default `15.0`. The darwin rows fail when the binary or any `.a` or `.o` under its build directory declares a newer one."
+        type: string
+        required: false
+        default: "15.0"
 
 permissions:
   contents: read
@@ -53,15 +59,17 @@ jobs:
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-musl
             cross: true
-          - os: macos-26
+          - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-latest
+          - os: macos-15
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.target, 'apple-darwin') && inputs.macos_deployment_target || '' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,6 +91,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: release-matrix-${{ matrix.target }}
+          env-vars: MACOSX_DEPLOYMENT_TARGET
           cache-on-failure: true
 
       - name: Install cross
@@ -102,3 +111,67 @@ jobs:
             BUILD_CMD="cross"
           fi
           $BUILD_CMD build --release --locked --target "$TARGET"
+
+      # rustc writes the deployment target into the binary, but a build
+      # script's C compiler targets the runner's SDK unless
+      # MACOSX_DEPLOYMENT_TARGET reaches it too. An object built for a newer
+      # macOS links without a warning, and the binary then fails to load on
+      # the older macOS the release claims. scripts/check-release-matrix-parity.sh
+      # holds this step to the same text in both release workflows.
+      - name: Check the macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$MACOSX_DEPLOYMENT_TARGET" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error title=macOS deployment target::macos_deployment_target is '${MACOSX_DEPLOYMENT_TARGET}'; expected a version such as 15.0"
+            exit 1
+          fi
+          # True when version $1 is newer than version $2.
+          newer() {
+            awk -v a="$1" -v b="$2" 'BEGIN {
+              n = split(a, x, "."); m = split(b, y, ".")
+              for (i = 1; i <= 3; i++) {
+                p = (i <= n) ? x[i] + 0 : 0; q = (i <= m) ? y[i] + 0 : 0
+                if (p != q) exit !(p > q)
+              }
+              exit 1
+            }'
+          }
+          dir="target/${TARGET}/release"
+          {
+            find "$dir" -maxdepth 1 -type f -perm -u+x
+            find "$dir/build" -type f \( -name '*.a' -o -name '*.o' \)
+          } 2>/dev/null | sort > macos-objects.txt
+          # One line per object: its path and the macOS it declares, from
+          # LC_BUILD_VERSION or, in older objects, LC_VERSION_MIN_MACOSX. An
+          # archive lists each member as `archive.a(member.o)`.
+          while IFS= read -r f; do otool -l "$f" 2>/dev/null || true; done < macos-objects.txt \
+            | awk '
+                /^[^[:space:]].*:$/ { object = substr($0, 1, length($0) - 1); command = ""; next }
+                $1 == "cmd" { command = $2; next }
+                (command == "LC_BUILD_VERSION" && $1 == "minos") || (command == "LC_VERSION_MIN_MACOSX" && $1 == "version") {
+                  print object "\t" $2; command = ""
+                }' > macos-minos.tsv
+          if [ ! -s macos-minos.tsv ]; then
+            echo "::error title=macOS deployment target::no Mach-O object under ${dir} declares a macOS version"
+            exit 1
+          fi
+          bad=0
+          while IFS=$'\t' read -r object minos; do
+            if newer "$minos" "$MACOSX_DEPLOYMENT_TARGET"; then
+              echo "::error title=macOS deployment target::${object} declares macOS ${minos}, newer than ${MACOSX_DEPLOYMENT_TARGET}, on ${TARGET}"
+              bad=$((bad + 1))
+            fi
+          done < macos-minos.tsv
+          echo "Objects by declared macOS version on ${TARGET} (deployment target ${MACOSX_DEPLOYMENT_TARGET}):"
+          cut -f 2 macos-minos.tsv | sort | uniq -c
+          find "$dir" -maxdepth 1 -type f -perm -u+x | while read -r binary; do
+            awk -F '\t' -v b="$binary" '$1 == b { print b " declares macOS " $2 }' macos-minos.tsv
+          done
+          if [ "$bad" -gt 0 ]; then
+            echo "::error title=macOS deployment target::${bad} object(s) on ${TARGET} declare a macOS newer than ${MACOSX_DEPLOYMENT_TARGET}; set MACOSX_DEPLOYMENT_TARGET for the whole build"
+            exit 1
+          fi
