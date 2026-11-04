@@ -114,6 +114,10 @@ for i in "${!compared_steps[@]}"; do
   require_step "$release" "${compared_steps[i]}" "${release_steps[i]}"
   require_step "$check" "${compared_steps[i]}" "${check_steps[i]}"
 done
+# The order comparison reads this step; without it the comparison has no fixed
+# point and passes whatever the order.
+require_step "$release" "Build release" "$(step_text "$release" "Build release")"
+require_step "$check" "Build release" "$(step_text "$check" "Build release")"
 
 steps_differ=false
 for i in "${!compared_steps[@]}"; do
