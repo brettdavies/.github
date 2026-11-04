@@ -4,7 +4,8 @@
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
 # runner, and cross flag, or when their `Install NASM` or `Check the macOS
-# deployment target` steps differ in any line.
+# deployment target` steps differ in any line or in where the build job runs
+# them around `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
@@ -69,40 +70,80 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-# A step's lines, from its `- name:` line to the line before the next step,
-# comment, or job.
+compared_steps=("Install NASM" "Check the macOS deployment target")
+
+# A step's lines in the `build` job, from its `- name:` line to the line before
+# the next step, comment, or job.
 step_text() {
   awk -v name="      - name: $2" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [A-Za-z_-]+:/ { exit }
+    !injob { next }
     $0 == name { on = 1; print; next }
-    on && (/^      - / || /^  [A-Za-z_-]+:/ || /^      #/) { exit }
+    on && (/^      - / || /^      #/) { exit }
     on { print }
   ' "$1"
 }
 
-steps_differ=false
-for step in "Install NASM" "Check the macOS deployment target"; do
-  for wf in "$release" "$check"; do
-    if [ -z "$(step_text "$wf" "$step")" ]; then
-      echo "FAIL: no \`$step\` step in $wf" >&2
-      exit 2
-    fi
-  done
-  release_step=$(step_text "$release" "$step")
-  check_step=$(step_text "$check" "$step")
-  if [ "$release_step" != "$check_step" ]; then
-    steps_differ=true
-    echo "FAIL: the \`$step\` steps differ (< $release, > $check)" >&2
-    diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
+# The compared steps and the build, in the order the `build` job runs them. The
+# same text on the wrong side of the build provisions nothing.
+step_order() {
+  local names
+  names=$(
+    IFS='|'
+    echo "${compared_steps[*]}|Build release"
+  )
+  awk -v pattern="^      - name: ($names)\$" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [A-Za-z_-]+:/ { exit }
+    injob && $0 ~ pattern { print }
+  ' "$1"
+}
+
+require_step() {
+  if [ -z "$3" ]; then
+    echo "FAIL: no \`$2\` step in the build job of $1" >&2
+    exit 2
   fi
+}
+
+declare -a release_steps check_steps
+for i in "${!compared_steps[@]}"; do
+  release_steps[i]=$(step_text "$release" "${compared_steps[i]}")
+  check_steps[i]=$(step_text "$check" "${compared_steps[i]}")
+  require_step "$release" "${compared_steps[i]}" "${release_steps[i]}"
+  require_step "$check" "${compared_steps[i]}" "${check_steps[i]}"
 done
 
-if [ "$release_rows" = "$check_rows" ]; then
-  if [ "$steps_differ" = false ]; then
-    echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same NASM and deployment-target steps"
-    exit 0
+steps_differ=false
+for i in "${!compared_steps[@]}"; do
+  if [ "${release_steps[i]}" != "${check_steps[i]}" ]; then
+    steps_differ=true
+    echo "FAIL: the \`${compared_steps[i]}\` steps differ (< $release, > $check)" >&2
+    diff <(printf '%s\n' "${release_steps[i]}") <(printf '%s\n' "${check_steps[i]}") >&2 || true
   fi
+done
+release_order=$(step_order "$release")
+check_order=$(step_order "$check")
+if [ "$release_order" != "$check_order" ]; then
+  steps_differ=true
+  echo "FAIL: the build jobs run these steps in a different order (< $release, > $check)" >&2
+  diff <(printf '%s\n' "$release_order") <(printf '%s\n' "$check_order") >&2 || true
+fi
+
+if [ "$release_rows" = "$check_rows" ] && [ "$steps_differ" = false ]; then
+  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same steps: $(
+    IFS=,
+    echo "${compared_steps[*]}"
+  )"
+  exit 0
+fi
+
+if [ "$steps_differ" = true ]; then
   echo "" >&2
-  echo "Give both workflows the same step text." >&2
+  echo "Give both workflows the same step text, in the same place around the build." >&2
+fi
+if [ "$release_rows" = "$check_rows" ]; then
   exit 1
 fi
 

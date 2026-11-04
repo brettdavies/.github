@@ -30,7 +30,7 @@ on:
   workflow_call:
     inputs:
       windows_nasm:
-        description: "Install NASM on the x86_64-pc-windows-msvc row before the build, as `rust-release.yml` takes it. Default false. A caller whose release passes it passes it here too, or this row fails where the release would pass."
+        description: "Install NASM on the x86_64-pc-windows-msvc row before the build, as `rust-release.yml` takes it. Default false. A caller passes the same value here and to the release: a mismatch builds this row differently from the release's, so this check fails where the release passes, or passes where it fails."
         type: boolean
         required: false
         default: false
@@ -92,10 +92,12 @@ jobs:
         if: matrix.cross != true
         run: rustup target add ${{ matrix.target }}
 
+      # windows_nasm joins the key, so a row that no longer installs NASM never
+      # restores objects assembled with it and passes where the release fails.
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: release-matrix-${{ matrix.target }}
+          key: release-matrix-${{ matrix.target }}${{ inputs.windows_nasm && '-nasm' || '' }}
           env-vars: MACOSX_DEPLOYMENT_TARGET
           cache-on-failure: true
 
@@ -108,13 +110,15 @@ jobs:
       # choco rather than a marketplace action: the shared workflow gains no
       # new pinned dependency. The package installs under Program Files
       # without touching the step's PATH, so the directory is appended
-      # explicitly. scripts/check-release-matrix-parity.sh holds this step to
-      # the same text in both release workflows.
+      # explicitly. The version pin keeps the check and a later release on one
+      # assembler, since choco has no lockfile.
+      # scripts/check-release-matrix-parity.sh holds this step to the same text
+      # in both release workflows.
       - name: Install NASM
         if: inputs.windows_nasm && runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nasm --no-progress --yes
+          choco install nasm --version=3.2.0 --no-progress --yes
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Build release

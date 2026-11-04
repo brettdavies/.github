@@ -292,7 +292,8 @@ passes `linux_musl_required: true`, a red row here means the release would fail 
 
 The matrix holds the same rows as the release build's, the same NASM install on the Windows row, and the same
 deployment-target check on the darwin rows. `scripts/check-release-matrix-parity.sh` compares the two by target, runner,
-and cross flag, and both steps line by line, and fails this repo's lint run when they differ.
+and cross flag, and both steps line by line and by where they run around the build, and fails this repo's lint run when
+they differ.
 
 |                                 |                                                                                                                                                                                               |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

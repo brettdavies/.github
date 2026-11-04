@@ -265,11 +265,12 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       # The deployment target joins the key, so a darwin build never restores
-      # C objects compiled for another one.
+      # C objects compiled for another one. windows_nasm joins it for the same
+      # reason: a row that no longer installs NASM rebuilds without it.
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}${{ inputs.windows_nasm && '-nasm' || '' }}
           env-vars: MACOSX_DEPLOYMENT_TARGET
 
       - name: Install cross
@@ -294,12 +295,15 @@ jobs:
       # choco rather than a marketplace action: the shared workflow gains no
       # new pinned dependency. The package installs under Program Files
       # without touching the step's PATH, so the directory is appended
-      # explicitly.
+      # explicitly. The version pin keeps the check and a later release on one
+      # assembler, since choco has no lockfile.
+      # scripts/check-release-matrix-parity.sh holds this step to the same text
+      # in both release workflows.
       - name: Install NASM
         if: inputs.windows_nasm && runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install nasm --no-progress --yes
+          choco install nasm --version=3.2.0 --no-progress --yes
           Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Build release
