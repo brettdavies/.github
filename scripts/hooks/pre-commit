@@ -10,6 +10,10 @@ set -euo pipefail
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
+if echo "$staged" | grep -qE '^(\.github/workflows/.*\.ya?ml|\.github/runner-labels\.env|README\.md)$'; then
+  bash scripts/check-runner-labels.sh
+fi
+
 if echo "$staged" | grep -qE '^\.github/workflows/.*\.ya?ml$'; then
   if command -v actionlint >/dev/null 2>&1; then
     actionlint

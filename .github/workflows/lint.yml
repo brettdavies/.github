@@ -34,6 +34,16 @@ jobs:
       - name: Check skippable job names
         run: bash scripts/check-workflow-job-names.sh
 
+  # Holds every shared workflow's macOS runner label to the one in
+  # .github/runner-labels.env, so the workflows move to a new image together.
+  runner-labels:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check macOS runner labels
+        run: bash scripts/check-runner-labels.sh
+
   # Holds the pre-tag build check to the rows the release builds. A row missing
   # from the check fails no run, so only this comparison reports it.
   release-matrix-parity:
