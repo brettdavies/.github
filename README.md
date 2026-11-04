@@ -604,7 +604,7 @@ gh release view v1.7.11 -R rhysd/actionlint --json assets \
 ```yaml
 with:
   actionlint-version: '1.7.11'
-  actionlint-sha256: 900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a
+  actionlint-sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
 ```
 
 To pin a release for every caller, add its digests to `known_actionlint_sha256` in

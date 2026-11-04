@@ -111,14 +111,15 @@ jobs:
   # job runs the unit tests, the real downloads, and the action itself from the
   # PR's tree, on both architectures with pinned checksums.
   actionlint-action:
+    name: actionlint-action (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-22.04
-            older_sha256: 900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a
+            older_sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
           - runner: ubuntu-24.04-arm
-            older_sha256: 21bc0dfb57a913fe175298c2a9e906ee630f747cb66d0a934d0d4b69f4ee1235
+            older_sha256: '21bc0dfb57a913fe175298c2a9e906ee630f747cb66d0a934d0d4b69f4ee1235'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
@@ -187,19 +188,28 @@ jobs:
               exit 1
               ;;
           esac
-      - name: Action fails closed on a release with no checksum
-        id: unknown
-        continue-on-error: true
-        uses: ./actions/actionlint
-        with:
-          version: 0.0.1
-      - name: Action fails on a checksum the archive does not match
-        id: wrong
-        continue-on-error: true
-        uses: ./actions/actionlint
-        with:
-          version: 1.7.11
-          sha256: 0000000000000000000000000000000000000000000000000000000000000000
+      # Asserts the message as well as the failure: an unquoted all-zero checksum
+      # is a YAML number, which fails the format check and never reaches the
+      # comparison with the real download.
+      - name: Install failures name their cause
+        run: |
+          set -euo pipefail
+          expect_failure() {
+            local out
+            if out=$(ACTIONLINT_VERSION=$2 ACTIONLINT_SHA256=$3 bash actions/actionlint/install-actionlint.sh "$RUNNER_TEMP/unused" 2>&1); then
+              echo "::error title=actionlint action::install succeeded with version '$2' and checksum '$3'"
+              exit 1
+            fi
+            case "$out" in
+              *"$1"*) ;;
+              *)
+                echo "::error title=actionlint action::install failed without saying '$1'"
+                exit 1
+                ;;
+            esac
+          }
+          expect_failure 'has no known checksum' 0.0.1 ''
+          expect_failure 'the download is not the pinned release' 1.7.11 "$(printf 'a%.0s' {1..64})"
       - name: Action runs a caller's release and checksum
         uses: ./actions/actionlint
         with:
@@ -213,9 +223,7 @@ jobs:
           "$RUNNER_TEMP/actionlint-tools/shellcheck" --version | grep -Fx 'version: 0.11.0'
       - name: Require the failing cases to fail
         env:
-          OUTCOMES: >-
-            ${{ steps.style.outcome }} ${{ steps.error.outcome }} ${{ steps.expression.outcome }}
-            ${{ steps.unknown.outcome }} ${{ steps.wrong.outcome }}
+          OUTCOMES: ${{ steps.style.outcome }} ${{ steps.error.outcome }} ${{ steps.expression.outcome }}
         run: |
           for outcome in $OUTCOMES; do
             if [ "$outcome" != failure ]; then
