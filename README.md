@@ -46,7 +46,7 @@ run a script from the caller's checkout, because the rule it enforces belongs to
 
 | Input                         | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
 | ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
+| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-15`, the command the Linux job runs                                |
 | `docs` (bool)                 | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
 | `msrv` (bool)                 | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
 | `completions` (bool)          | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |
@@ -236,7 +236,9 @@ the same tag. It stays unmarked as latest until the tap publishes the formula an
 `rust-finalize-release.yml`: after the bottles upload for a source-built formula, so the repository's latest release
 always has them, and at once for a prebuilt formula, which installs the release's own archives and has no bottles.
 
-Both darwin rows build on `macos-15`, `x86_64-apple-darwin` cross-built beside the native arm64 row.
+Both darwin rows build on `macos-15`, `x86_64-apple-darwin` cross-built beside the native arm64 row. Every shared
+workflow takes its macOS runner label from `.github/runner-labels.env`; to move them all to a new image, change that
+line and run `scripts/check-runner-labels.sh --fix`, and the lint job fails any label left behind.
 `macos_deployment_target` (default `15.0`) is set as `MACOSX_DEPLOYMENT_TARGET` for the whole build, so the C code a
 build script compiles declares the same oldest macOS as the Rust code. After each darwin build, a step reads the macOS
 version the binary and every `.a` and `.o` under its build directory declare, and fails, naming each file, when one is
