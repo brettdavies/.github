@@ -107,11 +107,128 @@ jobs:
             exit 1
           fi
 
+  # Lint-basics callers reach the actionlint action only through @main, so this
+  # job runs the unit tests, the real downloads, and the action itself from the
+  # PR's tree, on both architectures with pinned checksums.
+  actionlint-action:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            older_sha256: 900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a
+          - runner: ubuntu-24.04-arm
+            older_sha256: 21bc0dfb57a913fe175298c2a9e906ee630f747cb66d0a934d0d4b69f4ee1235
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit tests
+        run: python3 -B -m unittest discover -s actions/actionlint -p 'test_*.py' -v
+      - name: Write sample projects
+        run: |
+          set -euo pipefail
+          write_project() {
+            mkdir -p "sample/$1/.github/workflows" "sample/$1/.git"
+            printf 'on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: %s\n' "$2" \
+              > "sample/$1/.github/workflows/sample.yml"
+          }
+          # shellcheck disable=SC2016
+          {
+            write_project clean 'echo clean'
+            write_project info 'echo $HOME'
+            write_project warning 'unused=1'
+            write_project style 'x=`date`; echo "$x"'
+            write_project error 'echo $@'
+            write_project expression 'echo $''{{ matrix.nope }}'
+          }
+      - name: Action passes a clean project
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/clean
+      - name: Action passes a shellcheck info finding
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/info
+      - name: Action passes a shellcheck warning finding
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/warning
+      - name: Action fails a shellcheck style finding
+        id: style
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/style
+      - name: Action fails a shellcheck error finding
+        id: error
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/error
+      - name: Action fails an expression finding
+        id: expression
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/expression
+      - name: Real findings carry their file and line
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/actionlint-tools"
+          cd sample/expression
+          annotations=$(bash "$GITHUB_WORKSPACE/actions/actionlint/run-actionlint.sh" "$tools" || true)
+          case "$annotations" in
+            *'::error file=.github/workflows/sample.yml,line=6,col='*'title=actionlint::property "nope" is not defined'*) ;;
+            *)
+              echo "::error title=actionlint action::the real finding did not become the expected annotation"
+              exit 1
+              ;;
+          esac
+      - name: Action fails closed on a release with no checksum
+        id: unknown
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          version: 0.0.1
+      - name: Action fails on a checksum the archive does not match
+        id: wrong
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          version: 1.7.11
+          sha256: 0000000000000000000000000000000000000000000000000000000000000000
+      - name: Action runs a caller's release and checksum
+        uses: ./actions/actionlint
+        with:
+          version: 1.7.11
+          sha256: ${{ matrix.older_sha256 }}
+          working-directory: sample/clean
+      - name: Caller's release is the one installed
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/actionlint-tools/actionlint" -version | grep -Fx 1.7.11
+          "$RUNNER_TEMP/actionlint-tools/shellcheck" --version | grep -Fx 'version: 0.11.0'
+      - name: Require the failing cases to fail
+        env:
+          OUTCOMES: >-
+            ${{ steps.style.outcome }} ${{ steps.error.outcome }} ${{ steps.expression.outcome }}
+            ${{ steps.unknown.outcome }} ${{ steps.wrong.outcome }}
+        run: |
+          for outcome in $OUTCOMES; do
+            if [ "$outcome" != failure ]; then
+              echo "::error title=actionlint action::a case that must fail ended ${outcome}: ${OUTCOMES}"
+              exit 1
+            fi
+          done
+
   actionlint:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: reviewdog/action-actionlint@48e36f54d8da326b83ab061aee2cc5e01b5ca46f # v1.80.6
         with:
-          fail_level: error
+          persist-credentials: false
+      - uses: ./actions/actionlint
