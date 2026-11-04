@@ -3,18 +3,19 @@
 #
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag, or when their `Check the macOS deployment target`
-# steps differ in any line.
+# runner, and cross flag, or when their `Install NASM` or `Check the macOS
+# deployment target` steps differ in any line.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
 # release branch ever builds, and its first failure is a failed release. No run
 # fails on a missing row, so nothing else would report the gap. The same holds
-# for the deployment-target step: a check that reads objects differently from
-# the release passes a build the release then fails, or the reverse.
+# for both steps: a check that provisions a row differently, or reads objects
+# differently, from the release passes a build the release then fails, or the
+# reverse.
 #
-# Exit codes: 0 = both matrices hold the same rows and the same step, 1 = they
-# differ (the difference is printed), 2 = a matrix or the step could not be read.
+# Exit codes: 0 = both matrices hold the same rows and the same steps, 1 = they
+# differ (the difference is printed), 2 = a matrix or a step could not be read.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -68,37 +69,41 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-# The step's lines, from its `- name:` line to the line before the next step,
+# A step's lines, from its `- name:` line to the line before the next step,
 # comment, or job.
-minos_step() {
-  awk '
-    /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
+step_text() {
+  awk -v name="      - name: $2" '
+    $0 == name { on = 1; print; next }
     on && (/^      - / || /^  [A-Za-z_-]+:/ || /^      #/) { exit }
     on { print }
   ' "$1"
 }
-release_step=$(minos_step "$release")
-check_step=$(minos_step "$check")
-for wf in "$release" "$check"; do
-  if [ -z "$(minos_step "$wf")" ]; then
-    echo "FAIL: no \`Check the macOS deployment target\` step in $wf" >&2
-    exit 2
+
+steps_differ=false
+for step in "Install NASM" "Check the macOS deployment target"; do
+  for wf in "$release" "$check"; do
+    if [ -z "$(step_text "$wf" "$step")" ]; then
+      echo "FAIL: no \`$step\` step in $wf" >&2
+      exit 2
+    fi
+  done
+  release_step=$(step_text "$release" "$step")
+  check_step=$(step_text "$check" "$step")
+  if [ "$release_step" != "$check_step" ]; then
+    steps_differ=true
+    echo "FAIL: the \`$step\` steps differ (< $release, > $check)" >&2
+    diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
   fi
 done
 
-if [ "$release_rows" = "$check_rows" ] && [ "$release_step" = "$check_step" ]; then
-  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same deployment-target step"
-  exit 0
-fi
-
-if [ "$release_step" != "$check_step" ]; then
-  echo "FAIL: the \`Check the macOS deployment target\` steps differ (< $release, > $check)" >&2
-  diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
-  if [ "$release_rows" = "$check_rows" ]; then
-    echo "" >&2
-    echo "Give both workflows the same step text." >&2
-    exit 1
+if [ "$release_rows" = "$check_rows" ]; then
+  if [ "$steps_differ" = false ]; then
+    echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same NASM and deployment-target steps"
+    exit 0
   fi
+  echo "" >&2
+  echo "Give both workflows the same step text." >&2
+  exit 1
 fi
 
 echo "FAIL: the build matrices differ (target, runner, cross)" >&2
