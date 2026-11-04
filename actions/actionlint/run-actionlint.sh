@@ -13,6 +13,13 @@ set -euo pipefail
 dir=${1:?usage: run-actionlint.sh DIR}
 timeout_seconds=${ACTIONLINT_TIMEOUT_SECONDS:-300}
 
+# actionlint turns its shellcheck rule off without a message when the command is
+# missing, which would pass a workflow the gate should fail.
+if [ ! -x "$dir/shellcheck" ]; then
+  echo "::error title=actionlint::no shellcheck to run in ${dir}, so the shellcheck findings would go unreported"
+  exit 1
+fi
+
 # GitHub keeps this many annotations of one level from a step.
 annotation_cap=10
 

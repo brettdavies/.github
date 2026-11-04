@@ -255,6 +255,10 @@ class InstallTest(StubbedTest):
 
 
 class RunTest(StubbedTest):
+    def setUp(self):
+        super().setUp()
+        write_executable(self.stubs / "shellcheck", "#!/bin/sh\n")
+
     def run_action(self, findings="", exit_code=0, **env):
         write_executable(self.stubs / "actionlint", ACTIONLINT_STUB)
         (self.stubs / "findings").write_text(findings)
@@ -349,6 +353,13 @@ class RunTest(StubbedTest):
         findings = "".join(self.finding("expression", f"problem {n}", line=n) for n in range(1, 10))
         result = self.run_action(findings, 1)
         self.assertNotIn("findings fail this job", result.stdout)
+
+    def test_missing_shellcheck_fails_instead_of_skipping_its_findings(self):
+        (self.stubs / "shellcheck").unlink()
+        result = self.run_action()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no shellcheck to run", result.stdout)
+        self.assertFalse((self.stubs / "actionlint.args").exists())
 
     def test_findings_it_cannot_read_fail(self):
         result = self.run_action("", 1)
@@ -448,8 +459,9 @@ class ContractTest(unittest.TestCase):
         call = re.search(
             r"uses: brettdavies/\.github/actions/actionlint@main\n\s+with:\n((?:\s{10}\S.*\n)+)",
             LINT_BASICS.read_text(),
-        ).group(1)
-        passed = set(re.findall(r"^\s+([\w-]+):", call, re.M))
+        )
+        self.assertIsNotNone(call, "lint-basics.yml must call the action at @main; a ref rewritten for a scratch branch must not merge")
+        passed = set(re.findall(r"^\s+([\w-]+):", call.group(1), re.M))
         self.assertEqual(passed, {"version", "sha256"})
         self.assertLessEqual(passed, declared)
 
