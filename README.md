@@ -46,7 +46,7 @@ run a script from the caller's checkout, because the rule it enforces belongs to
 
 | Input                         | Job (check name under a `ci:` caller)  | What it runs                                                                                                   |
 | ----------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-latest`, the command the Linux job runs                            |
+| `cross_os_tests` (bool)       | `ci / Windows test`, `ci / macOS test` | `cargo test` on `windows-latest` and `macos-15`, the command the Linux job runs                                |
 | `docs` (bool)                 | `ci / Doc build`                       | `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`                                     |
 | `msrv` (bool)                 | `ci / MSRV`                            | `cargo +<rust-version> check --workspace --all-features --locked`, the version read from the root `Cargo.toml` |
 | `completions` (bool)          | `ci / Completions freshness`           | `scripts/generate-completions.sh --check`                                                                      |

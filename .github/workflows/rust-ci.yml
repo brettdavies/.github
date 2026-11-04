@@ -90,7 +90,7 @@ on:
         required: false
         default: stable
       cross_os_tests:
-        description: "Run the `Windows test` and `macOS test` jobs: the `cargo test` that `Fmt, clippy, test` runs on Linux, on `windows-latest` and `macos-latest`. `Windows check` only compiles, so a path, file mode, rename, or lock that behaves differently off Linux passes it and fails here. Default false."
+        description: "Run the `Windows test` and `macOS test` jobs: the `cargo test` that `Fmt, clippy, test` runs on Linux, on `windows-latest` and `macos-15`. `Windows check` only compiles, so a path, file mode, rename, or lock that behaves differently off Linux passes it and fails here. Default false."
         type: boolean
         required: false
         default: false
@@ -466,7 +466,10 @@ jobs:
   test-macos:
     name: macOS test
     if: ${{ inputs.cross_os_tests && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'test-macos')) }}
-    runs-on: macos-latest
+    # Pinned, not macos-latest: that label tracks the newest macOS image, whose
+    # hosted pool is the one jobs most often wait on or lose to capacity, and
+    # the release matrix builds on macos-15 already.
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
