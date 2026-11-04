@@ -1,0 +1,14 @@
+name: scratch bad
+on: workflow_dispatch
+jobs:
+  bad:
+    runs-on: ubuntu-latest
+    steps:
+      - name: An expression actionlint rejects
+        run: echo ${{ matrix.nope }}
+      - name: A shellcheck info finding
+        run: echo $HOME
+      - name: A shellcheck warning finding
+        run: unused=1
+      - name: A shellcheck error finding
+        run: echo $@
