@@ -75,9 +75,12 @@ paths so the body keeps its authored shape and no soft-wrapping is injected.
 Some of the reusable workflows this repo ships have a thin self-applied caller. When a self-applied caller exists, a PR
 to this repo exercises the PR's version of the reusable (via a `./...` local-path reference) rather than the
 merged-to-`main` version, catching regressions on the PR that introduces them rather than after the workflow has shipped
-to consumer repos. `guard-main-docs.yml` (via `self-guard-main-docs.yml`), `lint-basics.yml` (via `lint.yml`), and
-`dependabot-preflight.yml` (via `self-dependabot-preflight.yml`) are wired this way; the `guard-main-provenance.yml` and
-`guard-release-branch.yml` reusables are shipped but not self-applied here.
+to consumer repos. `guard-main-docs.yml` (via `self-guard-main-docs.yml`) and `dependabot-preflight.yml` (via
+`self-dependabot-preflight.yml`) are wired this way; the `guard-main-provenance.yml` and `guard-release-branch.yml`
+reusables are shipped but not self-applied here. `lint.yml` runs the composite actions behind `lint-basics.yml` by local
+path, because the required `actionlint` check has to keep that name and a job that calls a reusable workflow reports as
+`<job> / <reusable job>`. A change to the YAML of `lint-basics.yml` itself is tested from a draft pull request whose
+caller names the branch.
 
 The self-applied caller filename always differs from the reusable to avoid a self-collision. Pattern for any future
 guard reusable: add a thin self-applied caller (different filename, `./...` path reference, job-key matching the
