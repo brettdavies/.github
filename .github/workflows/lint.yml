@@ -21,6 +21,16 @@ jobs:
       - name: Check concurrency group namespacing
         run: bash scripts/check-workflow-concurrency.sh
 
+  # A skipped job reports under its raw `name:` text, so an expression there
+  # renames the check and a ruleset waits on a name that never reports.
+  workflow-job-names:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check skippable job names
+        run: bash scripts/check-workflow-job-names.sh
+
   # Holds the pre-tag build check to the rows the release builds. A row missing
   # from the check fails no run, so only this comparison reports it.
   release-matrix-parity:
