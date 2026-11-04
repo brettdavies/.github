@@ -1,0 +1,137 @@
+name: scratch baseline
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  old-severity:
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [clean, info, warning, style, error, syntax]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: reviewdog/action-actionlint@48e36f54d8da326b83ab061aee2cc5e01b5ca46f # v1.80.6
+        with:
+          fail_level: error
+          actionlint_flags: sample/${{ matrix.fixture }}.yml
+
+  tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 5
+    steps:
+      - name: Probe
+        run: |
+          echo "label=${{ matrix.label }} arch=$(uname -m)"
+          printf 'shellcheck: '; shellcheck --version 2>/dev/null | sed -n 2p || echo absent
+          printf 'pyflakes: '; pyflakes --version 2>/dev/null || echo absent
+          printf 'jq: '; jq --version 2>/dev/null || echo absent
+          printf 'python3: '; python3 --version 2>/dev/null || echo absent
+          printf 'actionlint: '; actionlint --version 2>/dev/null | head -1 || echo absent
+          printf 'pipe size: '; python3 -c 'import fcntl, os; r, w = os.pipe(); print(fcntl.fcntl(w, fcntl.F_GETPIPE_SZ))'
+
+  uncached:
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download, verify, extract
+        run: |
+          t0=$(date +%s%3N)
+          dir=$(mktemp -d)
+          curl -fsSL --retry 3 -o "$dir/a.tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          t1=$(date +%s%3N)
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $dir/a.tgz" | sha256sum -c -
+          tar -xzf "$dir/a.tgz" -C "$dir" actionlint
+          t2=$(date +%s%3N)
+          "$dir/actionlint" --version | head -1
+          echo "TIMING uncached attempt=${{ matrix.attempt }} download_ms=$((t1 - t0)) verify_extract_ms=$((t2 - t1)) ready_ms=$((t2 - t0))"
+
+  cold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start
+        id: start
+        run: |
+          echo "t0=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/al"
+      - name: Restore
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/al
+          key: scratch-actionlint-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Download, verify, extract
+        id: ready
+        env:
+          T0: ${{ steps.start.outputs.t0 }}
+          HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: |
+          t1=$(date +%s%3N)
+          dir="$RUNNER_TEMP/al"
+          if [ "$HIT" != true ]; then
+            curl -fsSL --retry 3 -o "$dir/a.tgz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          fi
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $dir/a.tgz" | sha256sum -c -
+          tar -xzf "$dir/a.tgz" -C "$dir" actionlint
+          t2=$(date +%s%3N)
+          "$dir/actionlint" --version | head -1
+          echo "t2=$t2" >> "$GITHUB_OUTPUT"
+          echo "TIMING cold hit=$HIT restore_ms=$((t1 - T0)) fetch_verify_extract_ms=$((t2 - t1)) ready_ms=$((t2 - T0))"
+      - name: Save
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/al/a.tgz
+          key: scratch-actionlint-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Save timing
+        env:
+          T2: ${{ steps.ready.outputs.t2 }}
+        run: echo "TIMING cold save_ms=$(($(date +%s%3N) - T2))"
+
+  warm:
+    needs: cold
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start
+        id: start
+        run: |
+          echo "t0=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/al"
+      - name: Restore
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/al/a.tgz
+          key: scratch-actionlint-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify, extract
+        env:
+          T0: ${{ steps.start.outputs.t0 }}
+          HIT: ${{ steps.restore.outputs.cache-hit }}
+        run: |
+          t1=$(date +%s%3N)
+          dir="$RUNNER_TEMP/al"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $dir/a.tgz" | sha256sum -c -
+          tar -xzf "$dir/a.tgz" -C "$dir" actionlint
+          t2=$(date +%s%3N)
+          "$dir/actionlint" --version | head -1
+          echo "TIMING warm attempt=${{ matrix.attempt }} hit=$HIT restore_ms=$((t1 - T0)) verify_extract_ms=$((t2 - t1)) ready_ms=$((t2 - T0))"
