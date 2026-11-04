@@ -466,9 +466,9 @@ jobs:
   test-macos:
     name: macOS test
     if: ${{ inputs.cross_os_tests && !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'test-macos')) }}
-    # Pinned, not macos-latest: that label tracks the newest macOS image, whose
-    # hosted pool is the one jobs most often wait on or lose to capacity, and
-    # the release matrix builds on macos-15 already.
+    # A pinned image from .github/runner-labels.env, the label every shared
+    # workflow's macOS jobs use: the `-latest` label tracks the newest image,
+    # whose hosted pool is the one jobs most often wait on or lose to capacity.
     runs-on: macos-15
     timeout-minutes: 20
     steps:
