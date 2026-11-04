@@ -1,0 +1,13 @@
+name: scratch caller conflict
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  basics:
+    uses: brettdavies/.github/.github/workflows/lint-basics.yml@scratch/actionlint-real-clean
+    with:
+      markdownlint: false
+      actionlint-version: '1.7.12'
+      actionlint-sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'

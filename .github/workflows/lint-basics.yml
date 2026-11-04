@@ -108,7 +108,7 @@ jobs:
         with:
           persist-credentials: false
       - name: actionlint
-        uses: brettdavies/.github/actions/actionlint@main
+        uses: brettdavies/.github/actions/actionlint@scratch/actionlint-real-clean
         with:
           version: ${{ inputs.actionlint-version }}
           sha256: ${{ inputs.actionlint-sha256 }}

@@ -1,0 +1,12 @@
+name: scratch caller default
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  basics:
+    uses: brettdavies/.github/.github/workflows/lint-basics.yml@scratch/actionlint-real-clean
+    with:
+      markdownlint: false
+

@@ -1,0 +1,13 @@
+name: scratch caller older
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  basics:
+    uses: brettdavies/.github/.github/workflows/lint-basics.yml@scratch/actionlint-real-clean
+    with:
+      markdownlint: false
+      actionlint-version: '1.7.11'
+      actionlint-sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
