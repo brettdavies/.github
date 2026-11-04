@@ -80,7 +80,9 @@ to consumer repos. `guard-main-docs.yml` (via `self-guard-main-docs.yml`) and `d
 reusables are shipped but not self-applied here. `lint.yml` runs the composite actions behind `lint-basics.yml` by local
 path, because the required `actionlint` check has to keep that name and a job that calls a reusable workflow reports as
 `<job> / <reusable job>`. A change to the YAML of `lint-basics.yml` itself is tested from a draft pull request whose
-caller names the branch.
+caller names the branch. That caller still reaches the composite actions on `main`, because `lint-basics.yml` addresses
+them there. To test a change to both before it merges, rewrite those `uses:` lines to name the branch on a scratch branch
+that closes unmerged; the pairing a plain draft caller runs, new YAML with the old action, never ships.
 
 The self-applied caller filename always differs from the reusable to avoid a self-collision. Pattern for any future
 guard reusable: add a thin self-applied caller (different filename, `./...` path reference, job-key matching the

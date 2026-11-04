@@ -570,8 +570,8 @@ before unpacking it, and lints every workflow in the repository, reading `.githu
 | anything else actionlint reports | error      | fails  |
 
 Every workflow is reported, whether or not the pull request touches it. GitHub shows at most 10 annotations of one level
-per step; the job log holds every finding. pyflakes does not run, so a `shell: python` step gets no Python lint. The job
-runs on Linux x86_64 and arm64 runners.
+per step, so 10 or more failing findings lead with an annotation that gives the count; the job log holds every finding.
+pyflakes does not run, so a `shell: python` step gets no Python lint. The job runs on Linux x86_64 and arm64 runners.
 
 **Matching local hooks.** A repository that keeps its tool versions in a file passes the one it reads. `with:` cannot
 read a file, so a job reads it first:
@@ -585,7 +585,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: read
-        run: echo "actionlint=$(bash scripts/tool-version.sh actionlint)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(bash scripts/tool-version.sh actionlint)
+          echo "actionlint=$version" >> "$GITHUB_OUTPUT"
   basics:
     needs: tools
     uses: brettdavies/.github/.github/workflows/lint-basics.yml@main
@@ -594,7 +596,9 @@ jobs:
 ```
 
 **A release with no pinned checksum.** The job fails before downloading anything unless the caller supplies the checksum
-for its runner's architecture. GitHub records each asset's digest when it is uploaded:
+for its runner's architecture. GitHub records each asset's digest when it is uploaded, and the input takes the
+`sha256:<hex>` value this prints as it stands. For a release with no recorded digest the command prints nothing, and the
+checksum comes from `sha256sum` over an archive you have checked.
 
 ```bash
 gh release view v1.7.11 -R rhysd/actionlint --json assets \
@@ -624,6 +628,10 @@ paths:
     ignore:
       - unexpected key "queue"
 ```
+
+**A hang.** actionlint 1.7.12 hangs on a `run:` block bigger than the runner's pipe buffer, 64 KiB on hosted runners
+([rhysd/actionlint#650](https://github.com/rhysd/actionlint/issues/650)). The job fails after 300 seconds and names the
+cause; moving that block into a script clears it.
 
 #### Plan frontmatter
 

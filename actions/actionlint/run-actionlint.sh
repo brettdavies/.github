@@ -7,10 +7,14 @@
 # read. pyflakes is off so a runner that happens to carry it cannot change the
 # result.
 #
-# Usage: run-actionlint.sh DIR
+# Usage: [ACTIONLINT_TIMEOUT_SECONDS=N] run-actionlint.sh DIR
 set -euo pipefail
 
 dir=${1:?usage: run-actionlint.sh DIR}
+timeout_seconds=${ACTIONLINT_TIMEOUT_SECONDS:-300}
+
+# GitHub keeps this many annotations of one level from a step.
+annotation_cap=10
 
 # actionlint unescapes \n, \t, and \\ in the format before Go parses it, so a
 # quoted string inside an action needs the doubled backslash. Newlines and tabs
@@ -32,18 +36,25 @@ escape_property() {
 }
 
 status=0
-findings=$("$dir/actionlint" -no-color -shellcheck="$dir/shellcheck" -pyflakes= -format "$format") || status=$?
+findings=$(timeout -k 5 "$timeout_seconds" "$dir/actionlint" -no-color -shellcheck="$dir/shellcheck" -pyflakes= -format "$format") || status=$?
 
-if [ "$status" -gt 1 ]; then
-  echo "::error title=actionlint::actionlint could not run and exited ${status}; its message is in the step log"
-  exit "$status"
-fi
+case "$status" in
+  0)
+    echo "actionlint: no findings"
+    exit 0
+    ;;
+  1) ;;
+  124 | 137)
+    echo "::error title=actionlint::actionlint did not finish in ${timeout_seconds} s. actionlint 1.7.12 hangs on a run block bigger than the runner's pipe buffer (https://github.com/rhysd/actionlint/issues/650); move the largest run block into a script."
+    exit "$status"
+    ;;
+  *)
+    echo "::error title=actionlint::actionlint could not run and exited ${status}; its message is in the step log"
+    exit "$status"
+    ;;
+esac
 
-if [ "$status" -eq 0 ]; then
-  echo "actionlint: no findings"
-  exit 0
-fi
-
+annotations=()
 failing=0
 below_gate=0
 below_gate_pattern='^shellcheck reported issue in this script: SC[0-9]+:(warning|info):'
@@ -61,9 +72,7 @@ while IFS=$'\t' read -r file line column kind message; do
   else
     below_gate=$((below_gate + 1))
   fi
-  printf '::%s file=%s,line=%s,col=%s,title=actionlint::%s\n' \
-    "$level" "$(escape_property "$file")" "$(escape_property "$line")" "$(escape_property "$column")" \
-    "$(escape_data "$message [$kind]")"
+  annotations+=("::${level} file=$(escape_property "$file"),line=$(escape_property "$line"),col=$(escape_property "$column"),title=actionlint::$(escape_data "$message [$kind]")")
 done <<<"$findings"
 
 if [ $((failing + below_gate)) -eq 0 ]; then
@@ -71,5 +80,10 @@ if [ $((failing + below_gate)) -eq 0 ]; then
   exit 1
 fi
 
+# The count goes first because findings past the cap lose their annotation.
+if [ "$failing" -ge "$annotation_cap" ]; then
+  echo "::error title=actionlint::${failing} findings fail this job and a step annotates at most ${annotation_cap} of them; the step log lists every one"
+fi
+printf '%s\n' "${annotations[@]}"
 echo "actionlint: ${failing} failing, ${below_gate} below the gate"
 [ "$failing" -eq 0 ]

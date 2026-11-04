@@ -22,8 +22,12 @@ supplied_sha256=${ACTIONLINT_SHA256:-}
 default_version=1.7.12
 shellcheck_version=0.11.0
 
+# A caller's value can reach the message, and a workflow command ends at a line
+# break, so the message is escaped the way run-actionlint.sh escapes a finding.
 fail() {
-  echo "::error title=actionlint::$1" >&2
+  local message=${1//%/%25}
+  message=${message//$'\r'/%0D}
+  echo "::error title=actionlint::${message//$'\n'/%0A}" >&2
   exit 1
 }
 
@@ -50,7 +54,9 @@ if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fail "actionlint-version '${version}' is not a release number; expected the form 1.7.12, with no leading v"
 fi
 
+# GitHub prints an asset's digest as sha256:<hex>.
 supplied_sha256=${supplied_sha256,,}
+supplied_sha256=${supplied_sha256#sha256:}
 if [ -n "$supplied_sha256" ] && ! [[ "$supplied_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   fail "actionlint-sha256 '${supplied_sha256}' is not 64 hexadecimal characters"
 fi
@@ -81,10 +87,11 @@ fi
 
 expected_sha256=${known_sha256:-$supplied_sha256}
 if [ -z "$expected_sha256" ]; then
-  fail "actionlint ${version} has no known checksum for ${archive}, so it was not downloaded. Pass actionlint-sha256 with the value from: gh release view v${version} -R rhysd/actionlint --json assets --jq '.assets[] | select(.name == \"${archive}\") | .digest'"
+  fail "actionlint ${version} has no known checksum for ${archive}, so it was not downloaded. Pass actionlint-sha256 with the value from: gh release view v${version} -R rhysd/actionlint --json assets --jq '.assets[] | select(.name == \"${archive}\") | .digest'. A release with no recorded digest prints nothing; run sha256sum over an archive you have checked."
 fi
 
 work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 fetch_verified "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}" \
   "$expected_sha256" "$work/actionlint.tar.gz"
 fetch_verified "https://github.com/koalaman/shellcheck/releases/download/v${shellcheck_version}/shellcheck-v${shellcheck_version}.${shellcheck_platform}.tar.xz" \
