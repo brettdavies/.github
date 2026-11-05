@@ -136,10 +136,8 @@ if [ "$release_order" != "$check_order" ]; then
 fi
 
 if [ "$release_rows" = "$check_rows" ] && [ "$steps_differ" = false ]; then
-  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same steps: $(
-    IFS=,
-    echo "${compared_steps[*]}"
-  )"
+  step_list=$(printf ', %s' "${compared_steps[@]}")
+  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same steps: ${step_list:2}"
   exit 0
 fi
 
