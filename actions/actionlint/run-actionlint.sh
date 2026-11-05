@@ -52,7 +52,7 @@ case "$status" in
     ;;
   1) ;;
   124 | 137)
-    echo "::error title=actionlint::actionlint did not finish in ${timeout_seconds} s. Releases up to 1.7.12 hang on a run block bigger than the runner's pipe buffer (https://github.com/rhysd/actionlint/issues/650); move the largest run block into a script."
+    echo "::error title=actionlint::actionlint did not finish in ${timeout_seconds} s. Releases 1.7.10 to 1.7.12 are known to hang on a run block bigger than the runner's pipe buffer (https://github.com/rhysd/actionlint/issues/650); move the largest run block into a script."
     exit "$status"
     ;;
   *)

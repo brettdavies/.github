@@ -357,6 +357,13 @@ class RunTest(StubbedTest):
         self.assertIn("so 9 appear beside this one", commands[0])
         self.assertEqual(len(commands), 13)
 
+    def test_count_leads_from_the_first_finding_past_the_cap(self):
+        findings = "".join(self.finding("expression", f"problem {n}", line=n) for n in range(1, 12))
+        result = self.run_action(findings, 1)
+        commands = [line for line in result.stdout.splitlines() if line.startswith("::")]
+        self.assertIn("11 findings fail this job", commands[0])
+        self.assertEqual(len(commands), 12)
+
     def test_count_does_not_lead_when_every_finding_fits(self):
         findings = "".join(self.finding("expression", f"problem {n}", line=n) for n in range(1, 11))
         result = self.run_action(findings, 1)

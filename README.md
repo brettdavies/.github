@@ -632,9 +632,9 @@ paths:
       - unexpected key "queue"
 ```
 
-**A hang.** actionlint 1.7.12 hangs on a `run:` block bigger than the runner's pipe buffer, 64 KiB on hosted runners
-([rhysd/actionlint#650](https://github.com/rhysd/actionlint/issues/650)). The job fails after 300 seconds and names the
-cause; moving that block into a script clears it.
+**A hang.** actionlint 1.7.10 to 1.7.12 are known to hang on a `run:` block bigger than the runner's pipe buffer, 64 KiB
+on hosted runners ([rhysd/actionlint#650](https://github.com/rhysd/actionlint/issues/650)). The job fails after 300
+seconds and names the cause; moving that block into a script clears it.
 
 #### Plan frontmatter
 
