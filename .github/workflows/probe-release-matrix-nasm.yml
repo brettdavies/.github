@@ -1,0 +1,16 @@
+name: Probe release matrix NASM
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  with-nasm:
+    uses: ./.github/workflows/rust-release-matrix-check.yml
+    with:
+      windows_nasm: true
+
+  without-nasm:
+    uses: ./.github/workflows/rust-release-matrix-check.yml
