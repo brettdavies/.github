@@ -157,6 +157,13 @@ class InstallTest(StubbedTest):
         self.assertIn("disagrees with", result.stderr)
         self.assertEqual(self.downloads(), [])
 
+    def test_checksum_equal_to_the_pin_is_accepted(self):
+        pinned = re.search(r"1\.7\.12-linux_amd64\) echo ([0-9a-f]{64})", INSTALL.read_text()).group(1)
+        result = self.install(version="1.7.12", sha256=f"sha256:{pinned.upper()}")
+        self.assertNotIn("disagrees with", result.stderr)
+        self.assertNotIn("is not 64 hexadecimal characters", result.stderr)
+        self.assertIn(f"expected {pinned}; the download is not the pinned release", result.stderr)
+
     def test_pinned_version_rejects_an_archive_that_is_not_the_release(self):
         result = self.install()
         self.assertEqual(result.returncode, 1)
@@ -347,11 +354,14 @@ class RunTest(StubbedTest):
         self.assertEqual(result.returncode, 1)
         commands = [line for line in result.stdout.splitlines() if line.startswith("::")]
         self.assertIn("12 findings fail this job", commands[0])
+        self.assertIn("so 9 appear beside this one", commands[0])
         self.assertEqual(len(commands), 13)
 
-    def test_count_does_not_lead_below_the_cap(self):
-        findings = "".join(self.finding("expression", f"problem {n}", line=n) for n in range(1, 10))
+    def test_count_does_not_lead_when_every_finding_fits(self):
+        findings = "".join(self.finding("expression", f"problem {n}", line=n) for n in range(1, 11))
         result = self.run_action(findings, 1)
+        commands = [line for line in result.stdout.splitlines() if line.startswith("::")]
+        self.assertEqual(len(commands), 10)
         self.assertNotIn("findings fail this job", result.stdout)
 
     def test_missing_shellcheck_fails_instead_of_skipping_its_findings(self):

@@ -52,7 +52,7 @@ case "$status" in
     ;;
   1) ;;
   124 | 137)
-    echo "::error title=actionlint::actionlint did not finish in ${timeout_seconds} s. actionlint 1.7.12 hangs on a run block bigger than the runner's pipe buffer (https://github.com/rhysd/actionlint/issues/650); move the largest run block into a script."
+    echo "::error title=actionlint::actionlint did not finish in ${timeout_seconds} s. Releases up to 1.7.12 hang on a run block bigger than the runner's pipe buffer (https://github.com/rhysd/actionlint/issues/650); move the largest run block into a script."
     exit "$status"
     ;;
   *)
@@ -87,9 +87,10 @@ if [ $((failing + below_gate)) -eq 0 ]; then
   exit 1
 fi
 
-# The count goes first because findings past the cap lose their annotation.
-if [ "$failing" -ge "$annotation_cap" ]; then
-  echo "::error title=actionlint::${failing} findings fail this job and a step annotates at most ${annotation_cap} of them; the step log lists every one"
+# Past the cap the count goes first, because the findings after it lose their
+# annotation; it takes one of the slots, so up to the cap it would cost one.
+if [ "$failing" -gt "$annotation_cap" ]; then
+  echo "::error title=actionlint::${failing} findings fail this job and a step shows at most ${annotation_cap} error annotations, so $((annotation_cap - 1)) appear beside this one; the step log lists every one"
 fi
 printf '%s\n' "${annotations[@]}"
 echo "actionlint: ${failing} failing, ${below_gate} below the gate"

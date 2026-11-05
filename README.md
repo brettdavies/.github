@@ -520,10 +520,10 @@ jobs:
 actionlint and markdownlint for any repository, with opt-in shellcheck, plan frontmatter, and workflow concurrency jobs.
 A job that is off reports skipped, which a ruleset counts as passing.
 
-|                                 |                                         |
-| ------------------------------- | --------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)            |
-| **Required caller permissions** | `contents: read`                        |
+|                                 |                              |
+| ------------------------------- | ---------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets) |
+| **Required caller permissions** | `contents: read`             |
 
 | Input                  | Type    | Default                | Effect                                                                                                         |
 | ---------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -572,8 +572,9 @@ before unpacking it, and lints every workflow in the repository, reading `.githu
 | anything else actionlint reports | error      | fails  |
 
 Every workflow is reported, whether or not the pull request touches it. GitHub shows at most 10 annotations of one level
-per step, so 10 or more failing findings lead with an annotation that gives the count; the job log holds every finding.
-pyflakes does not run, so a `shell: python` step gets no Python lint. The job runs on Linux x86_64 and arm64 runners.
+per step, so more than 10 failing findings lead with an annotation that gives the count; the job log holds every
+finding. pyflakes does not run, so a `shell: python` step gets no Python lint. The job runs on Linux x86_64 and arm64
+runners.
 
 **Matching local hooks.** A repository that keeps its tool versions in a file passes the one it reads. `with:` cannot
 read a file, so a job reads it first:
@@ -743,8 +744,7 @@ tool whose formula is named differently from its crate needs an optional `formul
 
 `scripts/hooks/` carries `pre-commit` (actionlint + markdownlint on staged files) and `pre-push` (actionlint,
 markdownlint, shellcheck, and the plan-frontmatter and actionlint action tests across the repo), mirroring the CI lint
-gate locally. Activate
-per clone:
+gate locally. Activate per clone:
 
 ```bash
 git config core.hooksPath scripts/hooks
