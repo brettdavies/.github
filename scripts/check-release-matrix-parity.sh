@@ -3,19 +3,18 @@
 #
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag, or when their `Install NASM` or `Check the macOS
-# deployment target` steps differ in any line or in where the build job runs
-# them around `Build release`.
+# runner, and cross flag, or when their `Check the macOS deployment target`
+# steps differ in any line or in where the build job runs them around
+# `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
 # release branch ever builds, and its first failure is a failed release. No run
 # fails on a missing row, so nothing else would report the gap. The same holds
-# for both steps: a check that provisions a row differently, or reads objects
-# differently, from the release passes a build the release then fails, or the
-# reverse.
+# for the deployment-target step: a check that reads objects differently from
+# the release passes a build the release then fails, or the reverse.
 #
-# Exit codes: 0 = both matrices hold the same rows and the same steps, 1 = they
+# Exit codes: 0 = both matrices hold the same rows and the same step, 1 = they
 # differ (the difference is printed), 2 = a matrix or a step could not be read.
 set -euo pipefail
 
@@ -70,7 +69,7 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-compared_steps=("Install NASM" "Check the macOS deployment target")
+compared_steps=("Check the macOS deployment target")
 
 # A step's lines in the `build` job, from its `- name:` line to the line before
 # the next step, comment, or job.
@@ -86,7 +85,7 @@ step_text() {
 }
 
 # The compared steps and the build, in the order the `build` job runs them. The
-# same text on the wrong side of the build provisions nothing.
+# same text on the other side of the build reads no objects and fails the row.
 step_order() {
   local names
   names=$(

@@ -292,17 +292,16 @@ A caller runs it when its dependency graph or toolchain pin changes and on every
 Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
 passes `linux_musl_required: true`, a red row here means the release would fail on the same row.
 
-The matrix holds the same rows as the release build's, the same NASM install on the Windows row, and the same
-deployment-target check on the darwin rows. `scripts/check-release-matrix-parity.sh` compares the two by target, runner,
-and cross flag, and both steps line by line and by where they run around the build, and fails this repo's lint run when
-they differ.
+The matrix holds the same rows as the release build's, and the same deployment-target check on the darwin rows.
+`scripts/check-release-matrix-parity.sh` compares the two by target, runner, and cross flag, and the check step line by
+line and by where its build job runs it relative to `Build release`, and fails this repo's lint run when they differ.
 
-|                                 |                                                                                                                                                                                               |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                               |
-| **Inputs**                      | `windows_nasm` (bool, optional, default `false`; NASM on the `x86_64-pc-windows-msvc` row) and `macos_deployment_target` (string, optional, default `15.0`), as `rust-release.yml` takes them |
-| **Secrets**                     | None                                                                                                                                                                                          |
-| **Required caller permissions** | `contents: read`                                                                                                                                                                              |
+|                                 |                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                              |
+| **Inputs**                      | `macos_deployment_target` (string, optional, default `15.0`), as `rust-release.yml` takes it |
+| **Secrets**                     | None                                                                                         |
+| **Required caller permissions** | `contents: read`                                                                             |
 
 Triggers, path filters, and the concurrency group belong to the caller, because which paths can break a build differs
 per repo.
