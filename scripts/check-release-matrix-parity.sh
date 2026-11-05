@@ -3,8 +3,9 @@
 #
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag, or when their `Check the macOS deployment target`
-# steps differ in any line.
+# runner, and cross flag, when their `Check the macOS deployment target` steps
+# differ in any line, or when either build job runs that step before
+# `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
@@ -13,8 +14,9 @@
 # for the deployment-target step: a check that reads objects differently from
 # the release passes a build the release then fails, or the reverse.
 #
-# Exit codes: 0 = both matrices hold the same rows and the same step, 1 = they
-# differ (the difference is printed), 2 = a matrix or the step could not be read.
+# Exit codes: 0 = both matrices hold the same rows and the same step, after the
+# build in both, 1 = they differ or a step runs before the build (the difference
+# is printed), 2 = a matrix or a step could not be read.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -33,7 +35,7 @@ rows() {
       open = 0
     }
     /^  build:/ { injob = 1; next }
-    injob && /^  [A-Za-z_-]+:/ { flush(); injob = 0 }
+    injob && /^  [^ #]/ { flush(); injob = 0 }
     !injob { next }
     /^[[:space:]]*(#|$)/ { next }
     { indent = match($0, /[^ ]/) - 1 }
@@ -68,22 +70,63 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-# The step's lines, from its `- name:` line to the line before the next step,
-# comment, or job.
+# The step's lines in the `build` job, from its `- name:` line to the line
+# before the next step, comment, or job.
 minos_step() {
   awk '
-    /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
-    on && (/^      - / || /^  [A-Za-z_-]+:/ || /^      #/) { exit }
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
+    on && (/^      - / || /^      #/) { exit }
     on { print }
   ' "$1"
 }
+
+# Which side of `Build release` the `build` job runs the step on: `after`,
+# `before`, `duplicate:<step>` when the job names either step more than once,
+# or nothing when the job has no `Build release` step. Before the
+# build the step reads only what the cache restored and never the binary this
+# run builds: with a cold cache it fails every darwin row, and with a warm one
+# it can pass on objects this run did not make.
+minos_side() {
+  awk '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && /^      - name: Build release$/ { builds++; build = NR }
+    injob && /^      - name: Check the macOS deployment target$/ { minoses++; minos = NR }
+    END {
+      if (minoses > 1) print "duplicate:Check the macOS deployment target"
+      else if (builds > 1) print "duplicate:Build release"
+      else if (build) print (minos > build ? "after" : "before")
+    }
+  ' "$1"
+}
+
 release_step=$(minos_step "$release")
 check_step=$(minos_step "$check")
 for wf in "$release" "$check"; do
   if [ -z "$(minos_step "$wf")" ]; then
-    echo "FAIL: no \`Check the macOS deployment target\` step in $wf" >&2
+    echo "FAIL: no \`Check the macOS deployment target\` step in the build job of $wf" >&2
     exit 2
   fi
+  side=$(minos_side "$wf")
+  case "$side" in
+    after) ;;
+    before)
+      echo "FAIL: $wf runs \`Check the macOS deployment target\` before \`Build release\`, so it never reads what this run builds" >&2
+      echo "" >&2
+      echo "Move the step after \`Build release\` in the build job." >&2
+      exit 1
+      ;;
+    duplicate:*)
+      echo "FAIL: the build job of $wf has more than one \`${side#duplicate:}\` step, so the guard cannot tell which one runs where" >&2
+      exit 2
+      ;;
+    *)
+      echo "FAIL: no \`Build release\` step in the build job of $wf" >&2
+      exit 2
+      ;;
+  esac
 done
 
 if [ "$release_rows" = "$check_rows" ] && [ "$release_step" = "$check_step" ]; then

@@ -295,7 +295,7 @@ passes `linux_musl_required: true`, a red row here means the release would fail 
 
 The matrix holds the same rows as the release build's, and the same deployment-target check on the darwin rows.
 `scripts/check-release-matrix-parity.sh` compares the two by target, runner, and cross flag, and the check step line by
-line, and fails this repo's lint run when they differ.
+line. It fails this repo's lint run when they differ, or when either build job runs that step before `Build release`.
 
 |                                 |                                                                                              |
 | ------------------------------- | -------------------------------------------------------------------------------------------- |
