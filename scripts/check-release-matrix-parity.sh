@@ -3,8 +3,8 @@
 #
 # Fails when the build matrix of `rust-release-matrix-check.yml` and the build
 # matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag, or when their `Check the macOS deployment target`
-# steps differ in any line or in where the build job runs them around
+# runner, and cross flag, when their `Check the macOS deployment target` steps
+# differ in any line, or when either build job runs that step before
 # `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
@@ -14,8 +14,9 @@
 # for the deployment-target step: a check that reads objects differently from
 # the release passes a build the release then fails, or the reverse.
 #
-# Exit codes: 0 = both matrices hold the same rows and the same step, 1 = they
-# differ (the difference is printed), 2 = a matrix or a step could not be read.
+# Exit codes: 0 = both matrices hold the same rows and the same step, after the
+# build in both, 1 = they differ or a step runs before the build (the difference
+# is printed), 2 = a matrix or a step could not be read.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -69,83 +70,68 @@ require_rows() {
 require_rows "$release" "$release_rows"
 require_rows "$check" "$check_rows"
 
-compared_steps=("Check the macOS deployment target")
-
-# A step's lines in the `build` job, from its `- name:` line to the line before
-# the next step, comment, or job.
-step_text() {
-  awk -v name="      - name: $2" '
+# The step's lines in the `build` job, from its `- name:` line to the line
+# before the next step, comment, or job.
+minos_step() {
+  awk '
     /^  build:/ { injob = 1; next }
     injob && /^  [A-Za-z_-]+:/ { exit }
-    !injob { next }
-    $0 == name { on = 1; print; next }
+    injob && /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
     on && (/^      - / || /^      #/) { exit }
     on { print }
   ' "$1"
 }
 
-# The compared steps and the build, in the order the `build` job runs them. The
-# same text on the other side of the build reads no objects and fails the row.
-step_order() {
-  local names
-  names=$(
-    IFS='|'
-    echo "${compared_steps[*]}|Build release"
-  )
-  awk -v pattern="^      - name: ($names)\$" '
+# Which side of `Build release` the `build` job runs the step on: `after`,
+# `before`, or nothing when the job has no `Build release` step. Before the
+# build the step reads only what the cache restored and never the binary this
+# run builds: with a cold cache it fails every darwin row, and with a warm one
+# it can pass on objects this run did not make.
+minos_side() {
+  awk '
     /^  build:/ { injob = 1; next }
     injob && /^  [A-Za-z_-]+:/ { exit }
-    injob && $0 ~ pattern { print }
+    injob && /^      - name: Build release$/ { build = NR }
+    injob && /^      - name: Check the macOS deployment target$/ { minos = NR }
+    END { if (build) print (minos > build ? "after" : "before") }
   ' "$1"
 }
 
-require_step() {
-  if [ -z "$3" ]; then
-    echo "FAIL: no \`$2\` step in the build job of $1" >&2
+release_step=$(minos_step "$release")
+check_step=$(minos_step "$check")
+for wf in "$release" "$check"; do
+  if [ -z "$(minos_step "$wf")" ]; then
+    echo "FAIL: no \`Check the macOS deployment target\` step in the build job of $wf" >&2
     exit 2
   fi
-}
-
-declare -a release_steps check_steps
-for i in "${!compared_steps[@]}"; do
-  release_steps[i]=$(step_text "$release" "${compared_steps[i]}")
-  check_steps[i]=$(step_text "$check" "${compared_steps[i]}")
-  require_step "$release" "${compared_steps[i]}" "${release_steps[i]}"
-  require_step "$check" "${compared_steps[i]}" "${check_steps[i]}"
+  case "$(minos_side "$wf")" in
+    after) ;;
+    before)
+      echo "FAIL: $wf runs \`Check the macOS deployment target\` before \`Build release\`, so it never reads what this run builds" >&2
+      echo "" >&2
+      echo "Move the step after \`Build release\` in the build job." >&2
+      exit 1
+      ;;
+    *)
+      echo "FAIL: no \`Build release\` step in the build job of $wf" >&2
+      exit 2
+      ;;
+  esac
 done
-# The order comparison reads this step; without it the comparison has no fixed
-# point and passes whatever the order.
-require_step "$release" "Build release" "$(step_text "$release" "Build release")"
-require_step "$check" "Build release" "$(step_text "$check" "Build release")"
 
-steps_differ=false
-for i in "${!compared_steps[@]}"; do
-  if [ "${release_steps[i]}" != "${check_steps[i]}" ]; then
-    steps_differ=true
-    echo "FAIL: the \`${compared_steps[i]}\` steps differ (< $release, > $check)" >&2
-    diff <(printf '%s\n' "${release_steps[i]}") <(printf '%s\n' "${check_steps[i]}") >&2 || true
-  fi
-done
-release_order=$(step_order "$release")
-check_order=$(step_order "$check")
-if [ "$release_order" != "$check_order" ]; then
-  steps_differ=true
-  echo "FAIL: the build jobs run these steps in a different order (< $release, > $check)" >&2
-  diff <(printf '%s\n' "$release_order") <(printf '%s\n' "$check_order") >&2 || true
-fi
-
-if [ "$release_rows" = "$check_rows" ] && [ "$steps_differ" = false ]; then
-  step_list=$(printf ', %s' "${compared_steps[@]}")
-  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same steps: ${step_list:2}"
+if [ "$release_rows" = "$check_rows" ] && [ "$release_step" = "$check_step" ]; then
+  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same deployment-target step"
   exit 0
 fi
 
-if [ "$steps_differ" = true ]; then
-  echo "" >&2
-  echo "Give both workflows the same step text, in the same place around the build." >&2
-fi
-if [ "$release_rows" = "$check_rows" ]; then
-  exit 1
+if [ "$release_step" != "$check_step" ]; then
+  echo "FAIL: the \`Check the macOS deployment target\` steps differ (< $release, > $check)" >&2
+  diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
+  if [ "$release_rows" = "$check_rows" ]; then
+    echo "" >&2
+    echo "Give both workflows the same step text." >&2
+    exit 1
+  fi
 fi
 
 echo "FAIL: the build matrices differ (target, runner, cross)" >&2
