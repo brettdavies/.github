@@ -26,6 +26,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       lint-basics.yml       # reusable actionlint, markdownlint, shellcheck, and plan frontmatter
       lint.yml              # internal: actionlint on push/PR
   actions/
+    actionlint/             # composite action behind lint-basics.yml's actionlint job
     plan-frontmatter/       # composite action behind lint-basics.yml's plans job
 ```
 
@@ -519,13 +520,15 @@ jobs:
 actionlint and markdownlint for any repository, with opt-in shellcheck, plan frontmatter, and workflow concurrency jobs.
 A job that is off reports skipped, which a ruleset counts as passing.
 
-|                                 |                                         |
-| ------------------------------- | --------------------------------------- |
-| **Trigger**                     | `workflow_call` (no secrets)            |
-| **Required caller permissions** | `contents: read`, `pull-requests: read` |
+|                                 |                              |
+| ------------------------------- | ---------------------------- |
+| **Trigger**                     | `workflow_call` (no secrets) |
+| **Required caller permissions** | `contents: read`             |
 
 | Input                  | Type    | Default                | Effect                                                                                                         |
 | ---------------------- | ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `actionlint-version`   | string  | empty (`1.7.12`)       | The [`rhysd/actionlint`](#actionlint) release, as `X.Y.Z`; empty selects the release the action pins           |
+| `actionlint-sha256`    | string  | empty                  | SHA-256 of that release's archive for the runner's architecture; needed only for a release with no pinned one  |
 | `markdownlint`         | boolean | `true`                 | Runs `basics / markdownlint`                                                                                   |
 | `markdownlint-globs`   | string  | `**/*.md`              | Glob patterns passed to markdownlint-cli2                                                                      |
 | `shellcheck`           | boolean | `false`                | Runs `basics / shellcheck`                                                                                     |
@@ -546,7 +549,6 @@ on:
   pull_request:
 permissions:
   contents: read
-  pull-requests: read
 jobs:
   basics:
     uses: brettdavies/.github/.github/workflows/lint-basics.yml@main
@@ -555,6 +557,84 @@ jobs:
       plans: true
       workflow-concurrency: true
 ```
+
+#### actionlint
+
+The `actionlint` job runs the `actions/actionlint` composite action. It downloads upstream
+[`rhysd/actionlint`](https://github.com/rhysd/actionlint) and shellcheck 0.11.0, checks each archive against a SHA-256
+before unpacking it, and lints every workflow in the repository, reading `.github/actionlint.yaml` when there is one.
+
+| Finding                          | Annotation | Job    |
+| -------------------------------- | ---------- | ------ |
+| shellcheck `info`                | notice     | passes |
+| shellcheck `warning`             | warning    | passes |
+| shellcheck `style` or `error`    | error      | fails  |
+| anything else actionlint reports | error      | fails  |
+
+Every workflow is reported, whether or not the pull request touches it. GitHub shows at most 10 annotations of one level
+per step, so more than 10 failing findings lead with an annotation that gives the count; the job log holds every
+finding. pyflakes does not run, so a `shell: python` step gets no Python lint. The job runs on Linux x86_64 and arm64
+runners.
+
+**Matching local hooks.** A repository that keeps its tool versions in a file passes the one it reads. `with:` cannot
+read a file, so a job reads it first:
+
+```yaml
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    outputs:
+      actionlint: ${{ steps.read.outputs.actionlint }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: read
+        run: |
+          version=$(bash scripts/tool-version.sh actionlint)
+          echo "actionlint=$version" >> "$GITHUB_OUTPUT"
+  basics:
+    needs: tools
+    uses: brettdavies/.github/.github/workflows/lint-basics.yml@main
+    with:
+      actionlint-version: ${{ needs.tools.outputs.actionlint }}
+```
+
+**A release with no pinned checksum.** The job fails before downloading anything unless the caller supplies the checksum
+for its runner's architecture. GitHub records each asset's digest when it is uploaded, and the input takes the
+`sha256:<hex>` value this prints as it stands. For a release with no recorded digest the command prints nothing, and the
+checksum comes from `sha256sum` over an archive you have checked.
+
+```bash
+gh release view v1.7.11 -R rhysd/actionlint --json assets \
+  --jq '.assets[] | select(.name == "actionlint_1.7.11_linux_amd64.tar.gz") | .digest'
+```
+
+```yaml
+with:
+  actionlint-version: '1.7.11'
+  actionlint-sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
+```
+
+To pin a release for every caller, add its digests to `known_actionlint_sha256` in
+`actions/actionlint/install-actionlint.sh`, and raise `default_version` there and the default in the input table above
+when it should become the default. A supplied checksum that disagrees with a pinned one fails the job.
+
+**Syntax newer than the release.** actionlint reports what its release does not know as an error. 1.7.12 rejects the
+`ubuntu-26.04` label, `concurrency.queue`, and the `code-quality` permission scope, among others. List a label in the
+caller's `.github/actionlint.yaml`, and ignore the rest by message:
+
+```yaml
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+paths:
+  .github/workflows/deploy.yml:
+    ignore:
+      - unexpected key "queue"
+```
+
+**A hang.** actionlint 1.7.10 to 1.7.12 are known to hang on a `run:` block bigger than the runner's pipe buffer, 64 KiB
+on hosted runners ([rhysd/actionlint#650](https://github.com/rhysd/actionlint/issues/650)). The job fails after 300
+seconds and names the cause; moving that block into a script clears it.
 
 #### Plan frontmatter
 
@@ -632,6 +712,8 @@ gh api -X PUT  repos/<owner>/<repo>/rulesets/<id> --input .github/rulesets/prote
 - `search-presence.yml` refuses a `config` path outside the repository and hands the skill the config by path, so no
   config value reaches a shell
 - The `plan-frontmatter` action downloads yq only as a pinned release whose sha256 matches before it runs
+- The `actionlint` action unpacks actionlint and shellcheck only after each archive matches a sha256 that did not come
+  from the same download, and fails before downloading a release with no known checksum
 - Tag format validation in finalize-release (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 - Per-job permission narrowing inside reusable workflows
 
@@ -661,8 +743,8 @@ tool whose formula is named differently from its crate needs an optional `formul
 ## Local hooks
 
 `scripts/hooks/` carries `pre-commit` (actionlint + markdownlint on staged files) and `pre-push` (actionlint,
-markdownlint, shellcheck, and the plan-frontmatter tests across the repo), mirroring the CI lint gate locally. Activate
-per clone:
+markdownlint, shellcheck, and the plan-frontmatter and actionlint action tests across the repo), mirroring the CI lint
+gate locally. Activate per clone:
 
 ```bash
 git config core.hooksPath scripts/hooks

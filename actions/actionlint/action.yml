@@ -1,0 +1,38 @@
+name: actionlint
+description: >-
+  Install upstream rhysd/actionlint and shellcheck at pinned releases, each
+  checked against a SHA-256, and lint the repository's workflows. One annotation
+  per finding. Any finding fails the step except a shellcheck warning or info.
+
+inputs:
+  version:
+    description: >-
+      The rhysd/actionlint release, as X.Y.Z. Empty selects the release
+      install-actionlint.sh pins. A release with no pinned checksum needs sha256.
+    required: false
+    default: ''
+  sha256:
+    description: >-
+      SHA-256 of actionlint_<version>_linux_<amd64 or arm64>.tar.gz for the
+      runner's architecture. Needed only for a release with no pinned checksum.
+    required: false
+    default: ''
+  working-directory:
+    description: The directory actionlint searches from for its project.
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Install actionlint
+      shell: bash
+      env:
+        ACTIONLINT_VERSION: ${{ inputs.version }}
+        ACTIONLINT_SHA256: ${{ inputs.sha256 }}
+      run: bash "$GITHUB_ACTION_PATH/install-actionlint.sh" "$RUNNER_TEMP/actionlint-tools"
+
+    - name: Run actionlint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: bash "$GITHUB_ACTION_PATH/run-actionlint.sh" "$RUNNER_TEMP/actionlint-tools"

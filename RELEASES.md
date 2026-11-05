@@ -102,10 +102,10 @@ checks, then paste the cleaned text back into the YAML file.
 
 ## Self-applied reusable workflows
 
-| Self-applied workflow      | Calls reusable                            | Why local-path reference                                                                                                                                                  |
-| -------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `self-guard-main-docs.yml` | `./.github/workflows/guard-main-docs.yml` | Filename differs from the reusable to avoid a self-collision; uses `./...` so the caller exercises the PR's version, catching regressions on the PR that introduces them. |
-| `lint.yml`                 | `./.github/workflows/lint-basics.yml`     | Repo-internal PR gate; the local path exercises the PR head's version of the reusable.                                                                                    |
+| Self-applied workflow      | Calls reusable                                       | Why local-path reference                                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `self-guard-main-docs.yml` | `./.github/workflows/guard-main-docs.yml`            | Filename differs from the reusable to avoid a self-collision; uses `./...` so the caller exercises the PR's version, catching regressions on the PR that introduces them. |
+| `lint.yml`                 | `./actions/actionlint`, `./actions/plan-frontmatter` | Repo-internal PR gate; the local paths exercise the PR head's version of the actions `lint-basics.yml` calls.                                                             |
 
 When adding a new reusable workflow, also add a thin self-applied caller (different filename, `./...` path reference,
 job-key matching the standard convention so the status-check name is stable), unless this repo cannot run it: the

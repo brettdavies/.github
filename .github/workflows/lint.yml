@@ -10,6 +10,9 @@ concurrency:
   group: lint-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # Guards the one concurrency mistake actionlint cannot model: a group keyed
   # only on caller context, which puts a reusable and its caller in one group.
@@ -117,11 +120,119 @@ jobs:
             exit 1
           fi
 
-  actionlint:
-    runs-on: ubuntu-22.04
+  # Lint-basics callers reach the actionlint action only through @main, so this
+  # job runs the action, the real downloads, and the unit tests from the PR's
+  # tree, on both architectures with pinned checksums and on the image a caller
+  # gets by default.
+  actionlint-action:
+    name: actionlint-action (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            older_sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
+          - runner: ubuntu-latest
+            older_sha256: '900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a'
+          - runner: ubuntu-24.04-arm
+            older_sha256: '21bc0dfb57a913fe175298c2a9e906ee630f747cb66d0a934d0d4b69f4ee1235'
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: reviewdog/action-actionlint@48e36f54d8da326b83ab061aee2cc5e01b5ca46f # v1.80.6
         with:
-          fail_level: error
+          persist-credentials: false
+      - name: Write sample projects
+        run: |
+          set -euo pipefail
+          mkdir -p sample/clean/.github/workflows sample/clean/.git sample/finding/.github/workflows sample/finding/.git
+          printf 'on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo clean\n' \
+            > sample/clean/.github/workflows/sample.yml
+          printf 'on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    nope: 1\n    steps:\n      - run: echo finding\n' \
+            > sample/finding/.github/workflows/sample.yml
+      - name: Action passes a clean project
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/clean
+      - name: Action fails a project with a finding
+        id: finding
+        continue-on-error: true
+        uses: ./actions/actionlint
+        with:
+          working-directory: sample/finding
+      - name: Require the finding to fail the action
+        env:
+          OUTCOME: ${{ steps.finding.outcome }}
+        run: |
+          if [ "$OUTCOME" != failure ]; then
+            echo "::error title=actionlint action::the action passed a project with a finding (outcome: $OUTCOME)"
+            exit 1
+          fi
+      - name: Unit tests on the default release
+        env:
+          ACTIONLINT_TEST_TOOLS: ${{ runner.temp }}/actionlint-tools
+        run: python3 -B -m unittest discover -s actions/actionlint -p 'test_*.py' -v
+      # Requires each failure's message: a case that only requires a failure also
+      # passes on a failure from some other check.
+      - name: Install failures name their cause
+        run: |
+          set -euo pipefail
+          expect_failure() {
+            local out
+            if out=$(ACTIONLINT_VERSION=$2 ACTIONLINT_SHA256=$3 bash actions/actionlint/install-actionlint.sh "$RUNNER_TEMP/unused" 2>&1); then
+              echo "::error title=actionlint action::install succeeded with version '$2' and checksum '$3'"
+              exit 1
+            fi
+            case "$out" in
+              *"$1"*) ;;
+              *)
+                echo "::error title=actionlint action::install failed without saying '$1'"
+                exit 1
+                ;;
+            esac
+          }
+          expect_failure 'has no known checksum' 0.0.1 ''
+          expect_failure 'the download is not the pinned release' 1.7.11 "$(printf 'a%.0s' {1..64})"
+      - name: Action runs a caller's release and checksum
+        uses: ./actions/actionlint
+        with:
+          version: '1.7.11'
+          sha256: ${{ matrix.older_sha256 }}
+          working-directory: sample/clean
+      - name: Caller's release is the one installed
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/actionlint-tools/actionlint" -version | grep -Fx 1.7.11
+          "$RUNNER_TEMP/actionlint-tools/shellcheck" --version | grep -Fx 'version: 0.11.0'
+      - name: Action accepts a digest as GitHub prints it
+        uses: ./actions/actionlint
+        with:
+          version: '1.7.11'
+          sha256: sha256:${{ matrix.older_sha256 }}
+          working-directory: sample/clean
+      - name: Real findings on a caller's release
+        env:
+          ACTIONLINT_TEST_TOOLS: ${{ runner.temp }}/actionlint-tools
+        run: python3 -B -m unittest discover -s actions/actionlint -p 'test_*.py' -k RealActionlintTest -v
+
+  # The required check. It carries the self-test's result, so a gate that stops
+  # failing on a finding cannot pass here, and it runs whatever the self-test did
+  # because a required job skipped by a failed `needs` reads as passed.
+  actionlint:
+    needs: actionlint-action
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Require the action's self-test to pass
+        env:
+          SELF_TEST: ${{ needs.actionlint-action.result }}
+        run: |
+          if [ "$SELF_TEST" != success ]; then
+            echo "::error title=actionlint::the actionlint-action self-test ended ${SELF_TEST}"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/actionlint

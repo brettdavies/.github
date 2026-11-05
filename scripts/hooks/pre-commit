@@ -39,6 +39,14 @@ if echo "$staged" | grep -qE '^actions/plan-frontmatter/'; then
   fi
 fi
 
+if echo "$staged" | grep -qE '^(actions/actionlint/|README\.md$)'; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -B -m unittest discover -s actions/actionlint -p 'test_*.py'
+  else
+    echo "pre-commit: python3 not installed; skipping the actionlint action tests"
+  fi
+fi
+
 if echo "$staged" | grep -qE '\.md$'; then
   if command -v markdownlint-cli2 >/dev/null 2>&1; then
     echo "$staged" | grep -E '\.md$' | tr '\n' '\0' | xargs -0 markdownlint-cli2
