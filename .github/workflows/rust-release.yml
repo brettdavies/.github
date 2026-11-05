@@ -69,11 +69,6 @@ on:
         type: string
         required: false
         default: ""
-      windows_nasm:
-        description: "Install NASM on the x86_64-pc-windows-msvc row before the build. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image and the cross rows provision it through the consumer's Cross.toml."
-        type: boolean
-        required: false
-        default: false
       macos_deployment_target:
         description: "The oldest macOS the darwin binaries run on, set as MACOSX_DEPLOYMENT_TARGET for the whole build so Rust and the C code a build script compiles declare the same minimum. Default `15.0`. The build fails when the binary or any `.a` or `.o` under its build directory declares a newer one."
         type: string
@@ -290,17 +285,6 @@ jobs:
           else
             echo "name=${BIN}" >> "$GITHUB_OUTPUT"
           fi
-
-      # choco rather than a marketplace action: the shared workflow gains no
-      # new pinned dependency. The package installs under Program Files
-      # without touching the step's PATH, so the directory is appended
-      # explicitly.
-      - name: Install NASM
-        if: inputs.windows_nasm && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install nasm --no-progress --yes
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Build release
         id: build
