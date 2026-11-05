@@ -35,7 +35,7 @@ rows() {
       open = 0
     }
     /^  build:/ { injob = 1; next }
-    injob && /^  [A-Za-z_-]+:/ { flush(); injob = 0 }
+    injob && /^  [^ #]/ { flush(); injob = 0 }
     !injob { next }
     /^[[:space:]]*(#|$)/ { next }
     { indent = match($0, /[^ ]/) - 1 }
@@ -75,7 +75,7 @@ require_rows "$check" "$check_rows"
 minos_step() {
   awk '
     /^  build:/ { injob = 1; next }
-    injob && /^  [A-Za-z_-]+:/ { exit }
+    injob && /^  [^ #]/ { exit }
     injob && /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
     on && (/^      - / || /^      #/) { exit }
     on { print }
@@ -83,17 +83,22 @@ minos_step() {
 }
 
 # Which side of `Build release` the `build` job runs the step on: `after`,
-# `before`, or nothing when the job has no `Build release` step. Before the
+# `before`, `duplicate:<step>` when the job names either step more than once,
+# or nothing when the job has no `Build release` step. Before the
 # build the step reads only what the cache restored and never the binary this
 # run builds: with a cold cache it fails every darwin row, and with a warm one
 # it can pass on objects this run did not make.
 minos_side() {
   awk '
     /^  build:/ { injob = 1; next }
-    injob && /^  [A-Za-z_-]+:/ { exit }
-    injob && /^      - name: Build release$/ { build = NR }
-    injob && /^      - name: Check the macOS deployment target$/ { minos = NR }
-    END { if (build) print (minos > build ? "after" : "before") }
+    injob && /^  [^ #]/ { exit }
+    injob && /^      - name: Build release$/ { builds++; build = NR }
+    injob && /^      - name: Check the macOS deployment target$/ { minoses++; minos = NR }
+    END {
+      if (minoses > 1) print "duplicate:Check the macOS deployment target"
+      else if (builds > 1) print "duplicate:Build release"
+      else if (build) print (minos > build ? "after" : "before")
+    }
   ' "$1"
 }
 
@@ -104,13 +109,18 @@ for wf in "$release" "$check"; do
     echo "FAIL: no \`Check the macOS deployment target\` step in the build job of $wf" >&2
     exit 2
   fi
-  case "$(minos_side "$wf")" in
+  side=$(minos_side "$wf")
+  case "$side" in
     after) ;;
     before)
       echo "FAIL: $wf runs \`Check the macOS deployment target\` before \`Build release\`, so it never reads what this run builds" >&2
       echo "" >&2
       echo "Move the step after \`Build release\` in the build job." >&2
       exit 1
+      ;;
+    duplicate:*)
+      echo "FAIL: the build job of $wf has more than one \`${side#duplicate:}\` step, so the guard cannot tell which one runs where" >&2
+      exit 2
       ;;
     *)
       echo "FAIL: no \`Build release\` step in the build job of $wf" >&2
