@@ -44,11 +44,6 @@ on:
         type: string
         required: false
         default: ""
-      windows_nasm:
-        description: "Install NASM on the Windows jobs before cargo runs. Default false. Set true when a dependency assembles on x86-64 Windows (aws-lc-sys, behind rustls's aws-lc-rs provider, does), because neither hosted Windows image ships NASM; cmake, its other build requirement, is preinstalled on every hosted image."
-        type: boolean
-        required: false
-        default: false
       docs_only:
         description: "Skip every job. Default false. A caller sets it once it has established that nothing in the change can reach cargo, such as a pull request that edits only documentation no Rust source reads. A job skipped by its condition reports success, which a ruleset counts as passing, so required checks stay satisfied. The audit and test matrices skip their steps rather than themselves: a matrix job skipped whole never expands, and its cells' checks would wait forever under their expanded names."
         type: boolean
@@ -337,18 +332,6 @@ jobs:
 
       - *rust-cache
 
-      # `cargo check` still runs build scripts, so a C library in the tree is
-      # compiled here. choco rather than a marketplace action: the shared
-      # workflow gains no new pinned dependency. The package installs under
-      # Program Files without touching the step's PATH, so the directory is
-      # appended explicitly.
-      - name: Install NASM
-        if: inputs.windows_nasm && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install nasm --no-progress --yes
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
-
       # Compiling is the whole check, so warm mode runs it as it is.
       - name: Check (Windows)
         run: cargo check --all-targets
@@ -452,13 +435,6 @@ jobs:
       - *install-rust
 
       - *rust-cache
-
-      - name: Install NASM
-        if: inputs.windows_nasm
-        shell: pwsh
-        run: |
-          choco install nasm --no-progress --yes
-          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\NASM'
 
       - name: Tests (Windows)
         run: cargo test${{ inputs.warm_cache && ' --no-run' || '' }}
