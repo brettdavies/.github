@@ -2,10 +2,10 @@
 # shellcheck (`shellcheck: true`), plan frontmatter (`plans: true`), and
 # workflow concurrency (`workflow-concurrency: true`) jobs.
 #
-# `pull-requests: read` on the actionlint job carries control's private-repo
-# reviewdog note: reviewdog reads the PR diff to scope findings, which a
-# private repo denies with `contents: read` alone. Harmless on this public
-# repo; required on private callers like meum-control.
+# The actionlint job runs upstream rhysd/actionlint from actions/actionlint at
+# a release checked against a pinned SHA-256. A repository that keeps its tool
+# versions in a file passes `actionlint-version` so CI runs what its hooks run;
+# a release with no pinned checksum also needs `actionlint-sha256`.
 #
 # Caller example (inside the repo's lint.yml):
 #   jobs:
@@ -13,6 +13,7 @@
 #       uses: brettdavies/.github/.github/workflows/lint-basics.yml@main
 #       with:
 #         runs-on: ubuntu-24.04
+#         actionlint-version: '1.7.12'
 #         markdownlint-globs: '**/*.md'
 #         shellcheck: true
 #         shellcheck-files: 'scripts/*.sh tests/*.sh fixtures/bin/xr'
@@ -21,12 +22,22 @@
 #         plans-globs: 'docs/plans/*.md'
 #         workflow-concurrency: true # scripts/check-workflow-concurrency.sh
 #
-# Required caller permissions: contents: read, pull-requests: read
+# Required caller permissions: contents: read
 name: Lint basics
 
 on:
   workflow_call:
     inputs:
+      actionlint-version:
+        description: "The rhysd/actionlint release the actionlint job runs, as X.Y.Z. Empty selects the release actions/actionlint/install-actionlint.sh pins. A release with no pinned checksum also needs `actionlint-sha256`; without it the job fails before downloading anything."
+        type: string
+        required: false
+        default: ''
+      actionlint-sha256:
+        description: "SHA-256 of actionlint_<version>_linux_<amd64 or arm64>.tar.gz for the runner's architecture. Needed only for an `actionlint-version` with no pinned checksum."
+        type: string
+        required: false
+        default: ''
       markdownlint:
         description: "Run the markdownlint job"
         type: boolean
@@ -86,19 +97,21 @@ permissions:
   contents: read
 
 jobs:
+  # A `./actions/...` path would resolve against the caller's checkout, so the
+  # action is addressed by repository.
   actionlint:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: actionlint
-        uses: reviewdog/action-actionlint@48e36f54d8da326b83ab061aee2cc5e01b5ca46f # v1.80.6
         with:
-          fail_level: error
+          persist-credentials: false
+      - name: actionlint
+        uses: brettdavies/.github/actions/actionlint@main
+        with:
+          version: ${{ inputs.actionlint-version }}
+          sha256: ${{ inputs.actionlint-sha256 }}
 
   markdownlint:
     if: ${{ inputs.markdownlint }}
