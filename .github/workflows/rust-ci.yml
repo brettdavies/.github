@@ -258,6 +258,7 @@ jobs:
       - &install-rust
         name: Install Rust
         if: env.RUN_STEPS != 'false'
+        timeout-minutes: 5 # slowest healthy run: 36 s, Windows
         shell: bash
         env:
           TOOLCHAIN: ${{ inputs.toolchain }}
@@ -399,6 +400,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install shellcheck
+        timeout-minutes: 3 # slowest healthy run: 18 s
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
@@ -487,6 +489,7 @@ jobs:
 
       - name: Install the declared rust-version
         id: msrv
+        timeout-minutes: 2 # slowest healthy run: 10 s
         run: |
           set -euo pipefail
           msrv="$(awk -F\" '/^rust-version *= *"/ {print $2; exit}' Cargo.toml)"
@@ -555,6 +558,7 @@ jobs:
           fi
 
       - name: Install ripgrep
+        timeout-minutes: 5 # slowest healthy run: 69 s, most of it apt-get update
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
@@ -626,17 +630,22 @@ jobs:
 
       - name: Install cargo-binstall
         if: env.RUN_AUDIT == 'true'
+        timeout-minutes: 1 # slowest healthy run: 1 s
         uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
-      # A second binstall attempt covers a transient release-asset fetch
-      # failure; a source build is the fallback after that.
+      # Prebuilt only. When binstall's release-asset check stalls, it gives
+      # up after its resolution timeouts and falls back to a source build that
+      # takes minutes; with that fallback disabled, a stall or a missing
+      # prebuilt fails the step within its timeout. The second attempt covers
+      # a fetch that fails fast.
       - &install-anc
         name: Install anc
         if: env.RUN_AUDIT == 'true'
+        timeout-minutes: 1 # slowest healthy run: 4 s
         run: |
-          cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
-            || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
-            || cargo install "agentnative@${ANC_VERSION}" --locked
+          cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm --disable-strategies compile \
+            || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm --disable-strategies compile \
+            || { echo "::error title=Install anc::no prebuilt anc ${ANC_VERSION} could be fetched for this runner, and this step does not build one from source"; exit 1; }
           installed="$(anc --version)"
           echo "${installed} (pinned ${ANC_VERSION})"
           if [ "$installed" != "anc ${ANC_VERSION}" ]; then
@@ -741,15 +750,19 @@ jobs:
 
       - name: Install cargo-binstall
         if: env.RUN_STEPS == 'true' && !inputs.warm_cache
+        timeout-minutes: 1 # slowest healthy run: 1 s
         uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
+      # Prebuilt only, as for anc. binstall's source fallback would also run
+      # cargo install without --locked, which nextest refuses to build.
       - name: Install cargo-nextest
         if: env.RUN_STEPS == 'true' && !inputs.warm_cache
+        timeout-minutes: 1 # slowest healthy run: 7 s
         run: |
           set -euo pipefail
-          cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
-            || cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
-            || cargo install "cargo-nextest@${NEXTEST_VERSION}" --locked
+          cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm --disable-strategies compile \
+            || cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm --disable-strategies compile \
+            || { echo "::error title=Install cargo-nextest::no prebuilt cargo-nextest ${NEXTEST_VERSION} could be fetched for this runner, and this step does not build one from source"; exit 1; }
           installed="$(cargo nextest --version | head -n 1)"
           echo "${installed} (pinned ${NEXTEST_VERSION})"
           case "$installed" in
