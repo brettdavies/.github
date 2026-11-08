@@ -3,9 +3,10 @@
 #
 # Fails when the build job of `rust-release-matrix-check.yml` and the build job
 # of `rust-release.yml` differ in what decides a build's outcome: the matrix
-# rows (each row's target, runner, and cross flag) or any line of the steps
-# both jobs share (installing and running `cross`, the build, and the
-# deployment-target check). It also fails when either job runs
+# rows (each row's target, runner, and cross flag), any line of the steps both
+# jobs share (installing and running `cross`, the build, and the
+# deployment-target check), or the `key` and `env-vars` of their
+# `Cache dependencies` steps. It also fails when either job runs
 # `Check the macOS deployment target` before `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
@@ -13,9 +14,11 @@
 # release branch ever builds, and its first failure is a failed release. No run
 # fails on a missing row, so nothing else would report the gap. The same holds
 # for a shared step: a check that builds or reads objects differently from the
-# release passes a build the release then fails, or the reverse.
+# release passes a build the release then fails, or the reverse. A check whose
+# cache key differs saves caches the release never restores, so its runs leave
+# the release cold.
 #
-# Exit codes: 0 = both jobs hold the same rows and steps, with the
+# Exit codes: 0 = both jobs hold the same rows, steps, and cache key, with the
 # deployment-target check after the build in both, 1 = they differ or that step
 # runs before the build (each difference is printed), 2 = a matrix or a step
 # could not be read.
@@ -114,7 +117,7 @@ for wf in "$release" "$check"; do
     echo "FAIL: no build matrix rows read from $wf" >&2
     exit 2
   fi
-  for name in "${shared_steps[@]}"; do
+  for name in "${shared_steps[@]}" "Cache dependencies"; do
     case "$(step_count "$wf" "$name")" in
       1) ;;
       0)
@@ -158,6 +161,18 @@ for name in "${shared_steps[@]}"; do
   fi
 done
 
+cache_key() {
+  step_text "$1" "Cache dependencies" | grep -E '^[[:space:]]+(key|env-vars):' || true
+}
+release_key=$(cache_key "$release")
+check_key=$(cache_key "$check")
+if [ "$release_key" != "$check_key" ]; then
+  failures=$((failures + 1))
+  echo "FAIL: the \`Cache dependencies\` steps differ in key or env-vars (< $release, > $check)" >&2
+  diff <(printf '%s\n' "$release_key") <(printf '%s\n' "$check_key") >&2 || true
+  echo "  Give both steps the same key and env-vars, so the check's runs refresh the caches the release restores." >&2
+fi
+
 for wf in "$release" "$check"; do
   if [ "$(minos_side "$wf")" = before ]; then
     failures=$((failures + 1))
@@ -170,4 +185,4 @@ if [ "$failures" -gt 0 ]; then
   exit 1
 fi
 
-echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same ${#shared_steps[@]} shared steps"
+echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same ${#shared_steps[@]} shared steps and cache key"

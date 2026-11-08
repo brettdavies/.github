@@ -87,10 +87,14 @@ jobs:
         if: matrix.cross != true
         run: rustup target add ${{ matrix.target }}
 
+      # The same job id, key, and env-vars as the release's build job, so a run
+      # on the branch a release runs on reads and refreshes the caches that
+      # release restores, and rebuilds them when they have expired.
+      # scripts/check-release-matrix-parity.sh holds the key and env-vars equal.
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: release-matrix-${{ matrix.target }}
+          key: ${{ matrix.target }}
           env-vars: MACOSX_DEPLOYMENT_TARGET
           cache-on-failure: true
 
