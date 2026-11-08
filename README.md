@@ -236,7 +236,8 @@ tag push, so the build restores the caches `main`'s runs saved; a run on a tag's
 run the ref names `main`, so `validate-inputs` checks the tag before anything builds: it refuses a tag that does not
 match `^v[0-9]+\.[0-9]+\.[0-9]+$`, a tag the repository does not have, and a tag whose commit is not the commit the run
 builds, which is `main`'s head. `scripts/check-release-tag-source.sh` fails this repo's lint run when the workflow reads
-`github.ref*` or `GITHUB_REF*`, or when its release step sets no `tag_name`, which defaults to the ref.
+`github.ref*`, `github.event.ref`, or `GITHUB_REF*`, or when its release step sets no `tag_name`, which defaults to the
+ref.
 
 The builds and the SBOM start once the inputs pass, beside the version check and the audits. Signing waits for all of
 them and publishing waits for signing, so a failed version check or blocking audit signs and publishes nothing; a failed

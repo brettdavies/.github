@@ -2,9 +2,10 @@
 # Release-tag source guard.
 #
 # Fails when `rust-release.yml` reads the run's ref outside a comment
-# (`github.ref`, `github.ref_name`, `GITHUB_REF`, `GITHUB_REF_NAME`, or any
-# other `github.ref*` or `GITHUB_REF*` field), or when one of its
-# `softprops/action-gh-release` steps sets no `tag_name`.
+# (`github.ref`, `github.ref_name`, `github.event.ref`, `GITHUB_REF`,
+# `GITHUB_REF_NAME`, or any other `github.ref*`, `github.event.ref*`, or
+# `GITHUB_REF*` field), or when one of its `softprops/action-gh-release` steps
+# sets no `tag_name`.
 #
 # Why the rule exists: a caller dispatches the release onto its default branch,
 # so the build restores that branch's caches, and in that run the ref names the
@@ -27,7 +28,7 @@ cd "$(git rev-parse --show-toplevel)"
 wf="${1:-.github/workflows/rust-release.yml}"
 
 if ! command -v yq >/dev/null 2>&1; then
-  echo "FAIL: yq is required to check $wf" >&2
+  echo "FAIL: yq is required to check $wf; install it with brew install yq, or see https://github.com/mikefarah/yq#install" >&2
   exit 2
 fi
 if [ ! -f "$wf" ]; then
@@ -37,10 +38,20 @@ fi
 
 failures=0
 
-refs=$(grep -nE 'github\.ref|GITHUB_REF' "$wf" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+# The job a line sits in, by the last two-space-indented key above it.
+job_at() {
+  awk -v want="$1" 'NR > want { exit } /^  [a-z][a-z0-9_-]*:$/ { job = substr($1, 1, length($1) - 1) } END { print job }' "$wf"
+}
+
+refs=$(grep -nE 'github\.(event\.)?ref|GITHUB_REF' "$wf" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
 while IFS= read -r hit; do
   [ -n "$hit" ] || continue
-  echo "FAIL: $wf:${hit%%:*} reads the run's ref, which names the branch in a dispatched run: ${hit#*:}" >&2
+  line="${hit%%:*}"
+  hint=""
+  if [ "$(job_at "$line")" = validate-inputs ]; then
+    hint=" (validate-inputs checks the tag, so it reads inputs.tag)"
+  fi
+  echo "FAIL: $wf:${line} reads the run's ref, which names the branch in a dispatched run${hint}: ${hit#*:}" >&2
   failures=$((failures + 1))
 done <<<"$refs"
 
