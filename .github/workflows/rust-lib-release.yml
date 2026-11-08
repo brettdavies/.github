@@ -130,10 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       # A dry run uploads nothing and needs no token; the trusted-publishing
       # exchange is skipped so a rehearsal from an unregistered workflow still
@@ -143,6 +140,10 @@ jobs:
         id: crates-io-auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
+      # A real publish skips the compile of the packaged crate with
+      # `--no-verify`: a caller runs `cargo publish --dry-run` in the
+      # pull-request gate the tagged tree merged through. A rehearsal keeps
+      # the compile, since checking the package is what it is for.
       - name: Publish to crates.io
         env:
           CRATE: ${{ inputs.crate }}
@@ -152,7 +153,7 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             cargo publish -p "$CRATE" --dry-run
           else
-            cargo publish -p "$CRATE"
+            cargo publish -p "$CRATE" --no-verify
           fi
 
   release:
@@ -166,7 +167,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Locate the crate's changelog
         id: changelog-path

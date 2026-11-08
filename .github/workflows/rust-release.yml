@@ -607,21 +607,21 @@ jobs:
             sleep 10
           done
 
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-
       - name: Authenticate with crates.io
         id: crates-io-auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
       # `-p` names the package: a bare `cargo publish` errors on a workspace
       # root that is a virtual manifest, and a workspace's library member ships
-      # through rust-lib-release.yml on its own tag.
+      # through rust-lib-release.yml on its own tag. `--no-verify` skips the
+      # compile of the packaged crate: a caller runs `cargo publish --dry-run`
+      # in the pull-request gate the tagged tree merged through, so the job
+      # keeps no dependency cache either.
       - name: Publish to crates.io
         env:
           CRATE: ${{ inputs.crate }}
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-        run: cargo publish -p "$CRATE"
+        run: cargo publish -p "$CRATE" --no-verify
 
   release:
     needs: [build, publish-crate]
