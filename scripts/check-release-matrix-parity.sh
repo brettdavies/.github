@@ -79,6 +79,15 @@ step_text() {
   ' "$1"
 }
 
+# The file line of the step's `- name:` line in the `build` job.
+step_line() {
+  awk -v want="      - name: $2" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && $0 == want { print NR; exit }
+  ' "$1"
+}
+
 # How many times the `build` job names the step.
 step_count() {
   awk -v want="      - name: $2" '
@@ -155,7 +164,7 @@ for name in "${shared_steps[@]}"; do
   check_step=$(step_text "$check" "$name")
   if [ "$release_step" != "$check_step" ]; then
     failures=$((failures + 1))
-    echo "FAIL: the \`$name\` steps differ (< $release, > $check)" >&2
+    echo "FAIL: the \`$name\` steps differ (< $release:$(step_line "$release" "$name"), > $check:$(step_line "$check" "$name"); diff lines count from each step's name line)" >&2
     diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
     echo "  Give both workflows the same step text." >&2
   fi
