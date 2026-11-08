@@ -258,6 +258,7 @@ jobs:
       - &install-rust
         name: Install Rust
         if: env.RUN_STEPS != 'false'
+        timeout-minutes: 5 # slowest healthy run: 36 s, Windows
         shell: bash
         env:
           TOOLCHAIN: ${{ inputs.toolchain }}
@@ -399,6 +400,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install shellcheck
+        timeout-minutes: 3 # slowest healthy run: 18 s
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
@@ -487,6 +489,7 @@ jobs:
 
       - name: Install the declared rust-version
         id: msrv
+        timeout-minutes: 2 # slowest healthy run: 10 s
         run: |
           set -euo pipefail
           msrv="$(awk -F\" '/^rust-version *= *"/ {print $2; exit}' Cargo.toml)"
@@ -555,6 +558,7 @@ jobs:
           fi
 
       - name: Install ripgrep
+        timeout-minutes: 5 # slowest healthy run: 69 s, most of it apt-get update
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep
@@ -626,23 +630,50 @@ jobs:
 
       - name: Install cargo-binstall
         if: env.RUN_AUDIT == 'true'
+        timeout-minutes: 1 # slowest healthy run: 1 s
         uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
-      # A second binstall attempt covers a transient release-asset fetch
-      # failure; a source build is the fallback after that.
+      # install-prebuilt installs a prebuilt binary only and is shared with
+      # Install cargo-nextest. A stalled release-asset check costs binstall
+      # 15 s per target and strategy (four to six of them) before its fallback,
+      # a source build that takes minutes. The 45 s deadline (the slowest
+      # healthy install takes 7 s) ends a stall early enough for the error to
+      # print inside the step timer. binstall retries a failed request itself,
+      # and a stall lasts minutes on the runner it hits, so there is one
+      # attempt. Both binaries print `<bin> <version>` on their first line.
       - &install-anc
         name: Install anc
         if: env.RUN_AUDIT == 'true'
-        run: |
-          cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
-            || cargo binstall "agentnative@${ANC_VERSION}" --force --no-confirm \
-            || cargo install "agentnative@${ANC_VERSION}" --locked
-          installed="$(anc --version)"
-          echo "${installed} (pinned ${ANC_VERSION})"
-          if [ "$installed" != "anc ${ANC_VERSION}" ]; then
-            echo "::error title=Install anc::found '${installed}' on PATH, expected anc ${ANC_VERSION}"
-            exit 1
-          fi
+        timeout-minutes: 1 # slowest healthy run: 4 s
+        env:
+          TOOL_CRATE: agentnative
+          TOOL_BIN: anc
+          TOOL_VERSION: ${{ inputs.anc_version }}
+        run: &install-prebuilt |
+          set -euo pipefail
+          status=0
+          timeout -k 5 45 cargo binstall "${TOOL_CRATE}@${TOOL_VERSION}" --force --no-confirm --disable-strategies compile || status=$?
+          case "$status" in
+            0) ;;
+            124 | 137)
+              echo "::error title=Install ${TOOL_BIN}::the ${TOOL_BIN} ${TOOL_VERSION} prebuilt did not download within 45 s; rerun the job"
+              exit 1
+              ;;
+            *)
+              echo "::error title=Install ${TOOL_BIN}::cargo binstall exited ${status} without a prebuilt ${TOOL_BIN} ${TOOL_VERSION} for this runner, and this step does not build one from source; its log above names the cause"
+              exit 1
+              ;;
+          esac
+          installed="$("$TOOL_BIN" --version)"
+          installed="${installed%%$'\n'*}"
+          echo "${installed} (pinned ${TOOL_VERSION})"
+          case "$installed" in
+            "${TOOL_BIN} ${TOOL_VERSION}" | "${TOOL_BIN} ${TOOL_VERSION} "*) ;;
+            *)
+              echo "::error title=Install ${TOOL_BIN}::found '${installed}' on PATH, expected ${TOOL_BIN} ${TOOL_VERSION}"
+              exit 1
+              ;;
+          esac
 
       - name: Build the release binary
         run: cargo build --release --locked --bin "$ANC_BIN"
@@ -722,10 +753,8 @@ jobs:
         partition: ${{ fromJSON('[[],["1/1"],["1/2","2/2"],["1/3","2/3","3/3"],["1/4","2/4","3/4","4/4"]]')[inputs.test_partitions] }}
     env:
       RUN_STEPS: ${{ !inputs.docs_only && (inputs.jobs == 'all' || contains(fromJSON(inputs.jobs), 'tests')) && (!inputs.warm_cache || startsWith(matrix.partition, '1/')) }}
-      NEXTEST_VERSION: ${{ inputs.nextest_version }}
       PARTITION: ${{ matrix.partition }}
       WARM_CACHE: ${{ inputs.warm_cache }}
-      ANC_VERSION: ${{ inputs.anc_version }}
       ANC_BIN: ${{ inputs.anc_bin }}
       ANC_SCORE_FLOOR: ${{ inputs.anc_score_floor }}
       ANC_BLOCKING_TIERS: ${{ inputs.anc_blocking_tiers }}
@@ -741,24 +770,20 @@ jobs:
 
       - name: Install cargo-binstall
         if: env.RUN_STEPS == 'true' && !inputs.warm_cache
+        timeout-minutes: 1 # slowest healthy run: 1 s
         uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
+      # binstall's source fallback, which install-prebuilt disables, would
+      # also run cargo install without --locked, which nextest refuses to
+      # build.
       - name: Install cargo-nextest
         if: env.RUN_STEPS == 'true' && !inputs.warm_cache
-        run: |
-          set -euo pipefail
-          cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
-            || cargo binstall "cargo-nextest@${NEXTEST_VERSION}" --force --no-confirm \
-            || cargo install "cargo-nextest@${NEXTEST_VERSION}" --locked
-          installed="$(cargo nextest --version | head -n 1)"
-          echo "${installed} (pinned ${NEXTEST_VERSION})"
-          case "$installed" in
-            "cargo-nextest ${NEXTEST_VERSION}" | "cargo-nextest ${NEXTEST_VERSION} "*) ;;
-            *)
-              echo "::error title=Install cargo-nextest::found '${installed}', expected cargo-nextest ${NEXTEST_VERSION}"
-              exit 1
-              ;;
-          esac
+        timeout-minutes: 1 # slowest healthy run: 7 s
+        env:
+          TOOL_CRATE: cargo-nextest
+          TOOL_BIN: cargo-nextest
+          TOOL_VERSION: ${{ inputs.nextest_version }}
+        run: *install-prebuilt
 
       # nextest compiles its binaries with `cargo test --no-run`, so the warm
       # build fills the cache the real run restores.
