@@ -232,9 +232,10 @@ soft-fail by default), crates.io publish (Trusted Publishing OIDC), a published 
 Homebrew dispatch.
 
 The `tag` input names the release, and no step reads the run's ref. A caller dispatches the release onto `main` from the
-tag push, so the build restores the caches `main`'s runs saved; a run on a tag's own ref finds none. In the dispatched
-run the ref names `main`, so `validate-inputs` checks the tag before anything builds: it refuses a tag that does not
-match `^v[0-9]+\.[0-9]+\.[0-9]+$`, a tag the repository does not have, and a tag whose commit is not the commit the run
+tag push. A run restores caches from its own ref and the default branch, and a run on a tag saves into the tag's scope,
+which no later run reads, so only a release on `main` saves caches the next release restores. In the dispatched run the
+ref names `main`, so `validate-inputs` checks the tag before anything builds: it refuses a tag that does not match
+`^v[0-9]+\.[0-9]+\.[0-9]+$`, a tag the repository does not have, and a tag whose commit is not the commit the run
 builds, which is `main`'s head. `scripts/check-release-tag-source.sh` fails this repo's lint run when the workflow reads
 `github.ref*`, `github.event.ref`, or `GITHUB_REF*`, or when its release step sets no `tag_name`, which defaults to the
 ref.
