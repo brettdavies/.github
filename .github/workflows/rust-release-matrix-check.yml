@@ -6,7 +6,7 @@
 #     check:
 #       uses: brettdavies/.github/.github/workflows/rust-release-matrix-check.yml@main
 #
-# The release build runs only on a tag push, so a dependency that breaks a
+# The release build runs only once its tag exists, so a dependency that breaks a
 # cross-compiled target is otherwise discovered while cutting the release: the
 # tag exists, and the fix lands after a failed publish. A caller runs this at
 # the two moments that matter: when its dependency graph or toolchain pin
@@ -96,7 +96,12 @@ jobs:
         with:
           key: ${{ matrix.target }}
           env-vars: MACOSX_DEPLOYMENT_TARGET
-          cache-on-failure: true
+          # Only a run on main saves: a release restores nothing a pull
+          # request's scope holds, and those entries count against the
+          # repository's 10 GB as much as the release's do. A failed row saves
+          # nothing, since a release that restores a partial entry by its exact
+          # key never saves over it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-binstall
         if: matrix.cross

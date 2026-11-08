@@ -430,8 +430,8 @@ file is not the one that was signed: dispatch nothing to Homebrew by hand, and e
 
 ### `rust-release-matrix-check.yml`
 
-Builds the seven targets `rust-release.yml` builds, and releases nothing. The release build runs only on a tag push, so
-without this a dependency that breaks a cross-compiled target is found while cutting the release, after the tag exists.
+Builds the seven targets `rust-release.yml` builds, and releases nothing. The release build runs only once its tag exists,
+so without this a dependency that breaks a cross-compiled target is found while cutting the release, after the tag exists.
 A caller runs it when its dependency graph or toolchain pin changes and on every release branch.
 
 Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
@@ -442,9 +442,12 @@ check the deployment target on the darwin rows. `scripts/check-release-matrix-pa
 runner, and cross flag, those steps line by line, and the two `Cache dependencies` steps' `key` and `env-vars`. It fails
 this repo's lint run when they differ, or when either build job runs the deployment-target check before `Build release`.
 
-The build cache takes the release's key, so a run on the branch a release runs on restores the release's caches, which
-keeps them from expiring, and rebuilds and saves them when they have. A caller that releases from `main` runs the check
-there on a weekly `schedule`, so the caches last between releases.
+The build cache takes the release's key, so a run on `main` restores the release's caches, which keeps them from
+expiring, and rebuilds and saves them when they have. Only a run on `main` saves, and a failed row saves nothing. A
+caller that releases from `main` runs the check there on a weekly `schedule`, which covers GitHub's seven-day expiry. It
+does not cover eviction: once a repository's caches pass its 10 GB limit, GitHub deletes the least recently used first,
+and a release's caches touched once a week are among them. A caller keeps them by pruning the caches its other refs no
+longer use.
 
 |                                 |                                                                                              |
 | ------------------------------- | -------------------------------------------------------------------------------------------- |
