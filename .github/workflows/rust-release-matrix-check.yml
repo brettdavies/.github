@@ -94,23 +94,49 @@ jobs:
           env-vars: MACOSX_DEPLOYMENT_TARGET
           cache-on-failure: true
 
+      - name: Install cargo-binstall
+        if: matrix.cross
+        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
+
       - name: Install cross
         if: matrix.cross
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall cross --version 0.2.5 --no-confirm --force
+        run: cargo binstall cross --version 0.2.5 --no-confirm --force
 
+      # cross asks `cargo metadata` on the host before it starts its image, and
+      # builds on the host when that call fails. Fetching first installs the
+      # toolchain the caller pins and downloads every crate, so the call has
+      # nothing left to fetch. scripts/check-release-matrix-parity.sh holds
+      # the cross steps and `Build release` to the same text in both release
+      # workflows.
+      - name: Fetch crates for cross
+        if: matrix.cross
+        run: cargo fetch --locked
+
+      # A host build is not the image's build, even when it succeeds: it links
+      # against the runner's libraries, not the target's. So the step fails
+      # whenever cross prints its fallback note, and names the warning before
+      # it, which is the cause.
       - name: Build release
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           USE_CROSS: ${{ matrix.cross }}
         run: |
-          BUILD_CMD="cargo"
-          if [ "$USE_CROSS" = "true" ]; then
-            BUILD_CMD="cross"
+          set -euo pipefail
+          if [ "$USE_CROSS" != "true" ]; then
+            cargo build --release --locked --target "$TARGET"
+            exit 0
           fi
-          $BUILD_CMD build --release --locked --target "$TARGET"
+          log="$RUNNER_TEMP/cross-build.log"
+          status=0
+          cross build --release --locked --target "$TARGET" 2>&1 | tee "$log" || status=$?
+          # shellcheck disable=SC2016 # the backticks are cross's own text
+          if grep -qF 'Falling back to `cargo` on the host' "$log"; then
+            cause=$(grep -m 1 -F '[cross] warning:' "$log" | sed 's/^\[cross\] warning: //' || true)
+            echo "::error title=cross-host-fallback::cross did not build ${TARGET} in its image and fell back to cargo on the host (${cause:-cross printed no cause}), so this build is not the image's. Nothing was published. Rerun the failed jobs with: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}. See https://github.com/brettdavies/.github/blob/main/README.md#cross-host-fallback"
+            exit 1
+          fi
+          exit "$status"
 
       # rustc writes the deployment target into the binary, but a build
       # script's C compiler targets the runner's SDK unless
