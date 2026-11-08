@@ -8,7 +8,7 @@
 #     pipeline:
 #       uses: brettdavies/.github/.github/workflows/rust-release.yml@main
 #       with:
-#         tag: ${{ inputs.tag }}
+#         tag: ${{ inputs.tag || github.ref_name }}  # a dispatch's input, or the pushed tag
 #         crate: bird
 #         bin: bird
 #         linux_musl_required: true       # optional, default false
@@ -160,32 +160,55 @@ jobs:
           set -euo pipefail
           caller="${CALLER%%@*}"
           caller="${caller##*/}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=release-tag-invalid::tag '${TAG}' is not a release tag: it must match ^v[0-9]+\.[0-9]+\.[0-9]+$, the form the binary's releases are tagged in. Nothing was built or published. Dispatch with the binary's tag: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref <tag> -f tag=<tag>. See ${DOCS}#release-tag-invalid"
+          runs="gh run list --repo ${GITHUB_REPOSITORY} --workflow ${caller} --limit 5"
+          err="$RUNNER_TEMP/tag-resolve.err"
+          # A dispatched tag, and GitHub's error text, reach the annotations
+          # below. Escaping keeps a `%`, CR, or LF in them from ending an
+          # annotation or starting another workflow command.
+          esc() { local s="${1//%/%25}"; s="${s//$'\r'/%0D}"; printf '%s' "${s//$'\n'/%0A}"; }
+          unreadable() {
+            cat "$err" >&2
+            echo "::error title=release-tag-unreadable::could not $1 from ${GITHUB_REPOSITORY}: $(esc "$(head -n 1 "$err")"). Nothing was built or published. A 403 means ${caller}'s job grants no contents: read; for another status, rerun once GitHub's API answers: gh run rerun ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}. See ${DOCS}#release-tag-unreadable"
+            exit 1
+          }
+          if [ -z "$TAG" ]; then
+            echo "::error title=release-tag-invalid::${caller} passed an empty tag. Nothing was built or published. Pass the tag in ${caller}'s call to this workflow: the dispatch's tag input, or the name of the tag a push started the run for. See ${DOCS}#release-tag-invalid"
             exit 1
           fi
-          err="$RUNNER_TEMP/tag-resolve.err"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            want="${TAG#refs/tags/}"
+            [[ "$want" =~ ^[0-9] ]] && want="v${want}"
+            [[ "$want" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || want="<tag>"
+            echo "::error title=release-tag-invalid::tag '$(esc "$TAG")' is not a release tag: it must match ^v[0-9]+\.[0-9]+\.[0-9]+$, the form the binary's releases are tagged in. Nothing was built or published. A tag push may already have started the release, as ${runs} shows; if none did, dispatch with the binary's tag: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${want} -f tag=${want}. See ${DOCS}#release-tag-invalid"
+            exit 1
+          fi
           if ! object=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha' 2> "$err"); then
             if grep -q 'HTTP 404' "$err"; then
-              echo "::error title=release-tag-missing::${GITHUB_REPOSITORY} has no tag ${TAG}. Nothing was built or published. Push the tag, then dispatch with it: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-missing"
+              echo "::error title=release-tag-missing::${GITHUB_REPOSITORY} has no tag ${TAG}. Nothing was built or published. Push the tag on the commit to release: a caller that dispatches the release from its tag push starts it then, and ${runs} shows that run. See ${DOCS}#release-tag-missing"
               exit 1
             fi
-            cat "$err" >&2
-            echo "::error::could not read tag ${TAG} from ${GITHUB_REPOSITORY}: $(head -n 1 "$err")"
-            exit 1
+            unreadable "read tag ${TAG}"
           fi
           read -r type sha <<<"$object"
           # An annotated tag names a tag object, which names the commit.
           while [ "$type" = tag ]; do
-            object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')
+            object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha' 2> "$err") \
+              || unreadable "read tag object ${sha} of ${TAG}"
             read -r type sha <<<"$object"
           done
           if [ "$type" != commit ]; then
-            echo "::error title=release-tag-missing::tag ${TAG} names a ${type}, not a commit. Nothing was built or published. See ${DOCS}#release-tag-missing"
+            echo "::error title=release-tag-missing::tag ${TAG} names a ${type}, not a commit. Nothing was built or published. Point the tag at the release commit and push it again: git tag -fa ${TAG} -m ${TAG} <commit> && git push --force origin ${TAG}. See ${DOCS}#release-tag-missing"
             exit 1
           fi
           if [ "$sha" != "$GITHUB_SHA" ]; then
-            echo "::error title=release-tag-moved::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}: the branch it was dispatched onto has moved past the tag. Nothing was built or published. Release from the tag's own ref, on cold caches: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-moved"
+            # `ahead` means the run's commit descends from the tag's.
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${sha}...${GITHUB_SHA}" --jq .status 2> "$err") \
+              || unreadable "compare tag ${TAG}'s commit ${sha} with ${GITHUB_SHA}"
+            if [ "$status" = ahead ]; then
+              echo "::error title=release-tag-moved::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}, which descends from it: the branch it was dispatched onto has moved past the tag. Nothing was built or published. Release from the tag's own ref, on cold caches: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-moved"
+            else
+              echo "::error title=release-tag-off-branch::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}, which does not descend from it (GitHub compares them as $(esc "$status")): the tag is not on the branch the release was dispatched onto. Nothing was built or published. Releasing the tag would publish a commit that branch does not carry, so a person decides which commit is the release: move the tag onto the branch, or merge its commit into the branch, then push the tag again. See ${DOCS}#release-tag-off-branch"
+            fi
             exit 1
           fi
           echo "Releasing ${TAG}, commit ${sha}"
@@ -204,6 +227,7 @@ jobs:
           CRATE: ${{ inputs.crate }}
           TAG: ${{ needs.validate-inputs.outputs.tag }}
           TAG_VERSION: ${{ needs.validate-inputs.outputs.version }}
+          DOCS: https://github.com/brettdavies/.github/blob/main/README.md
         run: |
           # `-p` names the package: a bare `cargo pkgid` errors on a workspace
           # root that is a virtual manifest. cargo pkgid output varies:
@@ -212,7 +236,7 @@ jobs:
           # last `#` OR `@` so both shapes collapse to the bare version.
           CARGO_VERSION=$(cargo pkgid -p "$CRATE" | sed -E 's|.*[@#]||')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag ${TAG} does not match ${CRATE} version ${CARGO_VERSION}"
+            echo "::error title=release-version-mismatch::tag ${TAG} names version ${TAG_VERSION}, and ${CRATE}'s Cargo.toml at the tagged commit says ${CARGO_VERSION}. Nothing is signed or published: the builds still running finish, and nothing signs them. Stop them: gh run cancel ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY}. Then release a commit whose Cargo.toml says ${TAG_VERSION}: bump the version and tag that commit, or move the tag onto one. See ${DOCS}#release-version-mismatch"
             exit 1
           fi
 
@@ -670,13 +694,13 @@ jobs:
         run: |
           set -euo pipefail
           deps=$(cargo metadata --format-version 1 --no-deps \
-            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .dependencies[] | select(.path != null and (.kind == null or .kind == "build")) | "\(.name)\t\(.req)"')
+            | jq -r --arg crate "$CRATE" '(.packages | map({(.name): .version}) | add) as $versions | .packages[] | select(.name == $crate) | .dependencies[] | select(.path != null and (.kind == null or .kind == "build")) | "\(.name)\t\(.req)\t\($versions[.name])"')
           if [ -z "$deps" ]; then
             echo "${CRATE} depends on no workspace member; nothing to wait for."
             exit 0
           fi
           probes="$(mktemp -d)"
-          while IFS=$'\t' read -r name req; do
+          while IFS=$'\t' read -r name req version; do
             mkdir -p "$probes/$name/src"
             : > "$probes/$name/src/lib.rs"
             printf '[package]\nname = "bound-probe"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\n%s = "%s"\n' "$name" "$req" > "$probes/$name/Cargo.toml"
@@ -685,9 +709,13 @@ jobs:
           next_log=$SECONDS
           while :; do
             missing=""
-            while IFS=$'\t' read -r name req; do
-              if ! cargo generate-lockfile --manifest-path "$probes/$name/Cargo.toml" --quiet 2>/dev/null; then
+            names=()
+            tags=()
+            while IFS=$'\t' read -r name req version; do
+              if ! cargo generate-lockfile --manifest-path "$probes/$name/Cargo.toml" --quiet 2> "$probes/$name/err"; then
                 missing="${missing} ${name}@${req}"
+                names+=("$name")
+                tags+=("${name}-v${version}")
               fi
             done <<<"$deps"
             if [ -z "$missing" ]; then
@@ -695,7 +723,18 @@ jobs:
               exit 0
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error title=library-wait-timeout::${CRATE} depends on${missing}, still not on crates.io at that bound after ${WAIT_SECONDS}s. Nothing was published. Once the library's release run is green, continue this release with: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}. See ${DOCS}#library-wait-timeout"
+              for name in "${names[@]}"; do
+                echo "::group::cargo's last answer for ${name}"
+                cat "$probes/$name/err"
+                echo "::endgroup::"
+              done
+              # rust-lib-release.yml tags a library `<crate>-v<version>` unless
+              # its caller sets another tag_prefix.
+              checks=""
+              for tag in "${tags[@]}"; do
+                checks="${checks}gh run list --repo ${GITHUB_REPOSITORY} --branch ${tag} --limit 1 --json conclusion,url; "
+              done
+              echo "::error title=library-wait-timeout::${CRATE} depends on${missing}, still not on crates.io at that bound after ${WAIT_SECONDS}s. Nothing was published; the builds and attestations are kept. The library's release runs on its tag (${tags[*]}): ${checks}a tag with no run was never pushed, so push it on this run's commit. Once that run is green, continue this release with: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}. See ${DOCS}#library-wait-timeout"
               exit 1
             fi
             if [ "$SECONDS" -ge "$next_log" ]; then
@@ -819,6 +858,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.validate-inputs.outputs.tag }}
+      VERSION: ${{ needs.validate-inputs.outputs.version }}
+      CRATE: ${{ inputs.crate }}
+      DOCS: https://github.com/brettdavies/.github/blob/main/README.md
       # This file. `github.workflow_ref` names the caller inside a called
       # workflow, so the signer is spelled out.
       SIGNER: brettdavies/.github/.github/workflows/rust-release.yml
@@ -839,7 +881,8 @@ jobs:
       # Every check runs at once and the step waits for all of them, so it
       # takes about as long as the slowest one. Each check logs to its own
       # file, printed whole when it fails, so the output of concurrent calls
-      # never interleaves.
+      # never interleaves. One annotation reports the failures: GitHub shows
+      # at most ten per step, and a release checks more files than that.
       - name: Verify build provenance and the SBOM attestation
         working-directory: release
         run: |
@@ -862,20 +905,21 @@ jobs:
             pids+=("$!")
           done
           failed=0
+          first=""
           for i in "${!pids[@]}"; do
             IFS='|' read -r file kind log <<<"${checks[$i]}"
             if wait "${pids[$i]}"; then
               echo "verified: ${file} (${kind})"
             else
               failed=$((failed + 1))
+              first="${first:-${file} (${kind})}"
               echo "::group::${file} (${kind}) did not verify"
               cat "$log"
               echo "::endgroup::"
-              echo "::error::${file} did not verify against its ${kind} attestation; the Homebrew dispatch does not go out"
             fi
           done
           if [ "$failed" -gt 0 ]; then
-            echo "${failed} of ${#pids[@]} attestation checks failed"
+            echo "::error title=attestation-verify-failed::${failed} of ${#pids[@]} attestation checks failed, the first ${first}; each one's output is in its group above. ${CRATE} ${VERSION} is on crates.io and the GitHub Release ${TAG} is published; Homebrew was not dispatched, so the release is not marked latest. Run the checks and the dispatch again, which an outage of GitHub's attestation API clears: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}. A second failure means a published file is not the one that was signed: dispatch nothing by hand, and escalate. See ${DOCS}#attestation-verify-failed"
             exit 1
           fi
           echo "All ${#pids[@]} attestation checks passed"

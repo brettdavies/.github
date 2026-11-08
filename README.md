@@ -243,8 +243,9 @@ them and publishing waits for signing, so a failed version check or blocking aud
 advisories audit does not block. A failed required build row cancels the others, and `gh run rerun <id> --failed` builds
 them again. Before it publishes, `publish-crate` waits up to ten minutes for each workspace member the crate depends on
 to reach crates.io at the declared bound, so a library tag pushed beside the binary's publishes first. The crate
-publishes with `cargo publish --no-verify`: the caller runs `cargo publish --dry-run` in the pull-request gate of the
-branch it tags, so the compile the publish skips has already passed on that tree.
+publishes with `cargo publish --no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`,
+which runs `cargo publish --dry-run`, on pull requests into the branch it tags, so the compile the publish skips has
+passed on that tree.
 
 On a cross row, `cross` asks `cargo metadata` on the host before it starts its image, and builds on the host when that
 call fails. The row runs `cargo fetch --locked` first, and fails whenever `cross` prints its fallback note, even when
@@ -289,10 +290,14 @@ workflow as the signer, before it pins the checksum, and stops the formula bump 
 | **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 **Caller example:** the tag push compiles nothing and dispatches the release onto `main`, which needs `actions: write`.
-A caller that releases on the tag push itself passes `tag: ${{ github.ref_name }}` and builds on cold caches.
+A caller that releases on the tag push itself passes `tag: ${{ github.ref_name }}` and builds on cold caches. The
+`run-name` titles the dispatched run `Release <tag>` and the tag push's run `Dispatch <tag>`, and the dispatch job's
+notice gives the command that lists the release run. When the dispatch job fails, that command shows whether the release
+started before anyone dispatches it by hand.
 
 ```yaml
 name: Release
+run-name: ${{ github.event_name == 'push' && 'Dispatch' || 'Release' }} ${{ inputs.tag || github.ref_name }}
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -316,7 +321,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
+          echo "::notice title=release-dispatched::Release ${TAG} runs on main: gh run list --repo ${GITHUB_REPOSITORY} --workflow release.yml --event workflow_dispatch --limit 1 --json displayTitle,status,url"
   pipeline:
     if: github.event_name == 'workflow_dispatch'
     uses: brettdavies/.github/.github/workflows/rust-release.yml@main
@@ -328,40 +335,96 @@ jobs:
       CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 ```
 
+#### Migrating a caller
+
+A caller that passes no `tag` fails at startup, before any job runs, so nothing builds or publishes. To move one over:
+
+1. Pass the tag. `tag: ${{ inputs.tag || github.ref_name }}` serves a caller that releases on its tag push and one that
+   dispatches the release, as the example above does.
+2. Require `rust-ci.yml`'s `Package check` on pull requests into the branch you tag. `publish-crate` compiles nothing, so
+   without that check a crate that does not build from its package can publish.
+3. Merge the caller change before pushing the next `v*` tag. A tag runs the caller at its own commit.
+
+A tag pushed before the change merged cannot be released as it stands. A dispatch onto `main` refuses it as
+`release-tag-moved`, because `main` carries the change and the tag does not, and a dispatch onto the tag runs a caller
+that takes no `workflow_dispatch`. Nothing was published, so move the tag onto the merged commit,
+`git tag -fa vX.Y.Z -m vX.Y.Z <commit> && git push --force origin vX.Y.Z`, or release the next patch.
+
 #### When a release stops
 
-Each refusal is an error annotation titled with its code. The annotation names the values that caused it and the command
-that recovers, with the run's id filled in.
+Each refusal is an error annotation titled with its code. The annotation names the values that caused it, says what was
+built or published, and gives the command that recovers, with the run's id, repository, and caller filled in; a
+command that still holds a `<placeholder>` is one to finish first.
 
 ##### `release-tag-invalid`
 
-The `tag` input does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`: a branch name, a commit id, a tag without its `v`, or a
-library's `<crate>-v<version>` tag. Nothing was built or published. Dispatch again with the binary's tag.
+The `tag` input is empty, or does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`: a branch name, a commit id, a tag without its
+`v`, or a library's `<crate>-v<version>` tag, which its `rust-lib-release.yml` caller releases. Nothing was built or
+published. An empty tag means the caller passes none; see [Migrating a caller](#migrating-a-caller). Otherwise a tag push
+may already have started the release, and the annotation's `gh run list` shows it. When none did, dispatch again with
+the binary's tag, which the annotation fills in when the input names it, as `4.6.0` or `refs/tags/v4.6.0` does.
 
 ##### `release-tag-missing`
 
 The repository has no tag of that name, or the tag names something other than a commit. Nothing was built or published.
-Push the tag, then dispatch with it.
+Push the tag on the commit to release. In a caller that dispatches the release from its tag push, as the example above
+does, that push starts the release, and dispatching by hand as well would start a second one. A tag that names a tree or
+a blob moves onto the commit with `git tag -fa`, pushed with `--force`.
+
+##### `release-tag-unreadable`
+
+GitHub's API did not answer a read of the tag, of the tag object an annotated tag names, or of the comparison between
+the tag's commit and the run's. Nothing was built or published. A 403 means the caller's job grants no `contents: read`;
+for another status, `gh run rerun <id>` runs the check again.
 
 ##### `release-tag-moved`
 
-The tag's commit is not the commit the run builds: the branch the release was dispatched onto moved past the tag after
-it was pushed. Nothing was built or published. `gh workflow run <caller> --ref <tag> -f tag=<tag>` releases from the
-tag's own ref, which builds the tagged commit on cold caches.
+The tag's commit is not the commit the run builds, and the run's commit descends from it: the branch the release was
+dispatched onto moved past the tag after it was pushed. Nothing was built or published.
+`gh workflow run <caller> --ref <tag> -f tag=<tag>` releases from the tag's own ref, which builds the tagged commit on
+cold caches. That dispatch needs the caller at the tag's commit to take `workflow_dispatch`; a tag pushed before its
+caller did is covered under [Migrating a caller](#migrating-a-caller).
+
+##### `release-tag-off-branch`
+
+The tag's commit is not in the history of the commit the run builds: the tag was cut on another branch, or on a local
+commit the branch never received. Nothing was built or published. The annotation gives no command, because releasing the
+tag as it stands would publish a commit the branch does not carry. A person decides which commit is the release: move
+the tag onto the branch, or merge the tag's commit into it, then push the tag again.
+
+##### `release-version-mismatch`
+
+The version in the tag is not the one the crate's `Cargo.toml` declares at the tagged commit, most often a version bump
+left out of the release. Nothing is signed or published, but the builds started beside the check and run to the end;
+`gh run cancel <id>` stops them. Then bump the version and tag the commit that carries it, or move the tag onto a commit
+whose version matches.
 
 ##### `cross-host-fallback`
 
 `cross` fell back to building a row on the host; the annotation quotes the warning it printed first, which is the cause.
-Nothing was published. `gh run rerun <id> --failed` builds that row again, with the rows fail-fast cancelled. When it
-fails again with the same warning, the cause is the runner or the image, not a passing fault: run the caller's matrix
-check, its `rust-release-matrix-check.yml` caller, to reproduce it outside the release.
+Nothing was published. `gh run rerun <id> --failed` builds that row again, with the rows fail-fast cancelled, on the
+version of this workflow the first attempt ran. When the fix is a change to this repository, `gh run rerun <id>` runs
+every job on the current version, which is safe because nothing was published. When the row fails again with the same
+warning, the cause is the runner or the image, not a passing fault: the caller's `rust-release-matrix-check.yml` caller
+reproduces it outside a release. A matrix check that fails the same way goes to an issue on `brettdavies/.github`
+quoting the warning.
 
 ##### `library-wait-timeout`
 
 A workspace member the crate depends on was not on crates.io at its bound ten minutes after `publish-crate` started,
 because the library's own release is still running, failed, or was never tagged. Nothing was published, and the builds
-and attestations are kept. Once the library's release run is green, `gh run rerun <id> --failed` runs `publish-crate`
-and the jobs after it.
+and attestations are kept. The annotation names the library's tag, `<crate>-v<version>`, with the `gh run list` that
+shows its release run, and the step prints cargo's last answer for each library, which tells an index or network
+failure apart from a version not yet published. A tag with no run was never pushed: push it on the release's commit.
+Once the library's release run is green, `gh run rerun <id> --failed` runs `publish-crate` and the jobs after it.
+
+##### `attestation-verify-failed`
+
+A published file did not verify against the attestation `attest` made for it. It is the one refusal that comes after
+publishing: the crate is on crates.io and the GitHub Release exists, but the Homebrew dispatch did not go out, so the
+release is not marked latest. Each failed check's output is in its own log group. `gh run rerun <id> --failed` runs the
+checks and the dispatch again, which clears an outage of GitHub's attestation API. A second failure means a published
+file is not the one that was signed: dispatch nothing to Homebrew by hand, and escalate.
 
 ### `rust-release-matrix-check.yml`
 
@@ -423,8 +486,9 @@ Release pipeline for a library crate in a workspace: version check against the c
 `cargo publish -p <crate>` (Trusted Publishing OIDC), GitHub Release (notes extracted from the changelog beside the
 crate, `make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
 
-The publish runs with `--no-verify`: the caller runs `cargo publish --dry-run` in the pull-request gate of the branch it
-tags, so the compile the publish skips has already passed on that tree. A `dry_run` rehearsal keeps the compile.
+The publish runs with `--no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`, which
+runs `cargo publish --dry-run`, on pull requests into the branch it tags, so the compile the publish skips has passed on
+that tree. A `dry_run` rehearsal keeps the compile.
 
 |                                 |                                                                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
