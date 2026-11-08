@@ -245,8 +245,8 @@ advisories audit does not block. A failed required build row cancels the others,
 them again. Before it publishes, `publish-crate` waits up to ten minutes for each workspace member the crate depends on
 to reach crates.io at the declared bound, so a library tag pushed beside the binary's publishes first. The crate
 publishes with `cargo publish --no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`,
-which runs `cargo publish --dry-run`, on pull requests into the branch it tags, so the compile the publish skips has
-passed on that tree.
+which runs `cargo publish --dry-run --workspace`, on pull requests into the branch it tags, so the compile the publish
+skips has passed on that tree.
 
 On a cross row, `cross` asks `cargo metadata` on the host before it starts its image, and builds on the host when that
 call fails. The row runs `cargo fetch --locked` first, and fails whenever `cross` prints its fallback note, even when
@@ -489,8 +489,8 @@ Release pipeline for a library crate in a workspace: version check against the c
 crate, `make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
 
 The publish runs with `--no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`, which
-runs `cargo publish --dry-run`, on pull requests into the branch it tags, so the compile the publish skips has passed on
-that tree. A `dry_run` rehearsal keeps the compile.
+runs `cargo publish --dry-run --workspace`, on pull requests into the branch it tags, so the compile the publish skips
+has passed on that tree. A `dry_run` rehearsal keeps the compile.
 
 |                                 |                                                                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

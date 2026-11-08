@@ -29,8 +29,8 @@
 # cancels the others. Before it publishes, the crate waits up to ten minutes for
 # every workspace member it depends on to reach crates.io at its bound, so a
 # library tag pushed beside this one publishes first. The publish skips the
-# verify compile: the caller runs `cargo publish --dry-run` in the pull-request
-# gate the tagged tree merged through.
+# verify compile: the caller runs `cargo publish --dry-run --workspace` in the
+# pull-request gate the tagged tree merged through.
 #
 # Build matrix is 7 targets: x86_64/aarch64 linux-gnu, x86_64/aarch64 linux-musl,
 # x86_64/aarch64 darwin, x86_64 windows-msvc. The two musl rows soft-fail by
@@ -759,8 +759,9 @@ jobs:
       # `-p` names the package: a bare `cargo publish` errors on a workspace
       # root that is a virtual manifest, and a workspace's library member ships
       # through rust-lib-release.yml on its own tag. `--no-verify` skips the
-      # compile of the packaged crate: a caller runs `cargo publish --dry-run`
-      # in the pull-request gate the tagged tree merged through, so the job
+      # compile of the packaged crate: a caller runs
+      # `cargo publish --dry-run --workspace` in the pull-request gate the
+      # tagged tree merged through, so the job
       # keeps no dependency cache either.
       - name: Publish to crates.io
         env:

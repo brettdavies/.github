@@ -141,8 +141,8 @@ jobs:
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
       # A real publish skips the compile of the packaged crate with
-      # `--no-verify`: a caller runs `cargo publish --dry-run` in the
-      # pull-request gate the tagged tree merged through. A rehearsal keeps
+      # `--no-verify`: a caller runs `cargo publish --dry-run --workspace` in
+      # the pull-request gate the tagged tree merged through. A rehearsal keeps
       # the compile, since checking the package is what it is for.
       - name: Publish to crates.io
         env:
