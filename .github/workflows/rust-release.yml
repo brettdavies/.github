@@ -732,21 +732,49 @@ jobs:
           done
           sha256sum --check sha256sum.txt
 
-      - name: Verify build provenance
+      # Every check runs at once and the step waits for all of them, so it
+      # takes about as long as the slowest one. Each check logs to its own
+      # file, printed whole when it fails, so the output of concurrent calls
+      # never interleaves.
+      - name: Verify build provenance and the SBOM attestation
         working-directory: release
         run: |
+          set -uo pipefail
+          logs="$RUNNER_TEMP/attestation-verify"
+          mkdir -p "$logs"
+          checks=()
+          pids=()
           for file in *; do
-            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER"
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
+              > "$logs/$file.provenance.log" 2>&1 &
+            checks+=("$file|build provenance|$logs/$file.provenance.log")
+            pids+=("$!")
           done
-
-      - name: Verify the SBOM attestation
-        working-directory: release
-        run: |
           for file in *.tar.gz *.zip; do
             [ -e "$file" ] || continue
             gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
-              --predicate-type https://cyclonedx.org/bom
+              --predicate-type https://cyclonedx.org/bom > "$logs/$file.sbom.log" 2>&1 &
+            checks+=("$file|SBOM|$logs/$file.sbom.log")
+            pids+=("$!")
           done
+          failed=0
+          for i in "${!pids[@]}"; do
+            IFS='|' read -r file kind log <<<"${checks[$i]}"
+            if wait "${pids[$i]}"; then
+              echo "verified: ${file} (${kind})"
+            else
+              failed=$((failed + 1))
+              echo "::group::${file} (${kind}) did not verify"
+              cat "$log"
+              echo "::endgroup::"
+              echo "::error::${file} did not verify against its ${kind} attestation; the Homebrew dispatch does not go out"
+            fi
+          done
+          if [ "$failed" -gt 0 ]; then
+            echo "${failed} of ${#pids[@]} attestation checks failed"
+            exit 1
+          fi
+          echo "All ${#pids[@]} attestation checks passed"
 
   homebrew:
     needs: [release, verify-attestations]
