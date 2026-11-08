@@ -1,28 +1,41 @@
 #!/usr/bin/env bash
 # Release-matrix parity guard.
 #
-# Fails when the build matrix of `rust-release-matrix-check.yml` and the build
-# matrix of `rust-release.yml` hold different rows, comparing each row's target,
-# runner, and cross flag, when their `Check the macOS deployment target` steps
-# differ in any line, or when either build job runs that step before
-# `Build release`.
+# Fails when the build job of `rust-release-matrix-check.yml` and the build job
+# of `rust-release.yml` differ in what decides a build's outcome: the matrix
+# rows (each row's target, runner, and cross flag), any line of the steps both
+# jobs share (installing and running `cross`, the build, and the
+# deployment-target check), or the `key` and `env-vars` of their
+# `Cache dependencies` steps. It also fails when either job runs
+# `Check the macOS deployment target` before `Build release`.
 #
 # Why the rule exists: the check workflow builds, before a tag, what the release
 # builds after one. A row the release gains and the check lacks is a target no
 # release branch ever builds, and its first failure is a failed release. No run
 # fails on a missing row, so nothing else would report the gap. The same holds
-# for the deployment-target step: a check that reads objects differently from
-# the release passes a build the release then fails, or the reverse.
+# for a shared step: a check that builds or reads objects differently from the
+# release passes a build the release then fails, or the reverse. A check whose
+# cache key differs saves caches the release never restores, so its runs leave
+# the release cold.
 #
-# Exit codes: 0 = both matrices hold the same rows and the same step, after the
-# build in both, 1 = they differ or a step runs before the build (the difference
-# is printed), 2 = a matrix or a step could not be read.
+# Exit codes: 0 = both jobs hold the same rows, steps, and cache key, with the
+# deployment-target check after the build in both, 1 = they differ or that step
+# runs before the build (each difference is printed), 2 = a matrix or a step
+# could not be read.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
 release=.github/workflows/rust-release.yml
 check=.github/workflows/rust-release-matrix-check.yml
+
+shared_steps=(
+  "Install cargo-binstall"
+  "Install cross"
+  "Fetch crates for cross"
+  "Build release"
+  "Check the macOS deployment target"
+)
 
 # One line per row of the `build` job's `matrix.include`: target, runner, and
 # whether the row cross-compiles. A row opens at its `- os:` line and closes at
@@ -51,6 +64,54 @@ rows() {
   ' "$1" | sort
 }
 
+# The named step's lines in the `build` job, from its `- name:` line to the
+# line before the next step, comment, or job, without trailing blank lines. A
+# comment above a step is not part of it, so the two jobs may explain a step
+# differently.
+step_text() {
+  awk -v want="      - name: $2" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && $0 == want { on = 1; print; next }
+    on && (/^      - / || /^      #/) { exit }
+    on && /^[[:space:]]*$/ { blanks = blanks $0 "\n"; next }
+    on { printf "%s", blanks; blanks = ""; print }
+  ' "$1"
+}
+
+# The file line of the step's `- name:` line in the `build` job.
+step_line() {
+  awk -v want="      - name: $2" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && $0 == want { print NR; exit }
+  ' "$1"
+}
+
+# How many times the `build` job names the step.
+step_count() {
+  awk -v want="      - name: $2" '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && $0 == want { n++ }
+    END { print n + 0 }
+  ' "$1"
+}
+
+# Which side of `Build release` the `build` job runs the deployment-target
+# check on. Before the build the step reads only what the cache restored and
+# never the binary this run builds: with a cold cache it fails every darwin
+# row, and with a warm one it can pass on objects this run did not make.
+minos_side() {
+  awk '
+    /^  build:/ { injob = 1; next }
+    injob && /^  [^ #]/ { exit }
+    injob && /^      - name: Build release$/ { build = NR }
+    injob && /^      - name: Check the macOS deployment target$/ { minos = NR }
+    END { print (minos > build ? "after" : "before") }
+  ' "$1"
+}
+
 for wf in "$release" "$check"; do
   if [ ! -f "$wf" ]; then
     echo "FAIL: $wf does not exist" >&2
@@ -60,104 +121,77 @@ done
 
 release_rows=$(rows "$release")
 check_rows=$(rows "$check")
-
-require_rows() {
-  if [ -z "$2" ]; then
-    echo "FAIL: no build matrix rows read from $1" >&2
-    exit 2
-  fi
-}
-require_rows "$release" "$release_rows"
-require_rows "$check" "$check_rows"
-
-# The step's lines in the `build` job, from its `- name:` line to the line
-# before the next step, comment, or job.
-minos_step() {
-  awk '
-    /^  build:/ { injob = 1; next }
-    injob && /^  [^ #]/ { exit }
-    injob && /^      - name: Check the macOS deployment target$/ { on = 1; print; next }
-    on && (/^      - / || /^      #/) { exit }
-    on { print }
-  ' "$1"
-}
-
-# Which side of `Build release` the `build` job runs the step on: `after`,
-# `before`, `duplicate:<step>` when the job names either step more than once,
-# or nothing when the job has no `Build release` step. Before the
-# build the step reads only what the cache restored and never the binary this
-# run builds: with a cold cache it fails every darwin row, and with a warm one
-# it can pass on objects this run did not make.
-minos_side() {
-  awk '
-    /^  build:/ { injob = 1; next }
-    injob && /^  [^ #]/ { exit }
-    injob && /^      - name: Build release$/ { builds++; build = NR }
-    injob && /^      - name: Check the macOS deployment target$/ { minoses++; minos = NR }
-    END {
-      if (minoses > 1) print "duplicate:Check the macOS deployment target"
-      else if (builds > 1) print "duplicate:Build release"
-      else if (build) print (minos > build ? "after" : "before")
-    }
-  ' "$1"
-}
-
-release_step=$(minos_step "$release")
-check_step=$(minos_step "$check")
 for wf in "$release" "$check"; do
-  if [ -z "$(minos_step "$wf")" ]; then
-    echo "FAIL: no \`Check the macOS deployment target\` step in the build job of $wf" >&2
+  if [ -z "$(rows "$wf")" ]; then
+    echo "FAIL: no build matrix rows read from $wf" >&2
     exit 2
   fi
-  side=$(minos_side "$wf")
-  case "$side" in
-    after) ;;
-    before)
-      echo "FAIL: $wf runs \`Check the macOS deployment target\` before \`Build release\`, so it never reads what this run builds" >&2
-      echo "" >&2
-      echo "Move the step after \`Build release\` in the build job." >&2
-      exit 1
-      ;;
-    duplicate:*)
-      echo "FAIL: the build job of $wf has more than one \`${side#duplicate:}\` step, so the guard cannot tell which one runs where" >&2
-      exit 2
-      ;;
-    *)
-      echo "FAIL: no \`Build release\` step in the build job of $wf" >&2
-      exit 2
-      ;;
-  esac
+  for name in "${shared_steps[@]}" "Cache dependencies"; do
+    case "$(step_count "$wf" "$name")" in
+      1) ;;
+      0)
+        echo "FAIL: no \`$name\` step in the build job of $wf" >&2
+        exit 2
+        ;;
+      *)
+        echo "FAIL: the build job of $wf has more than one \`$name\` step, so the guard cannot tell which one runs" >&2
+        exit 2
+        ;;
+    esac
+  done
 done
 
-if [ "$release_rows" = "$check_rows" ] && [ "$release_step" = "$check_step" ]; then
-  echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same deployment-target step"
-  exit 0
-fi
+failures=0
 
-if [ "$release_step" != "$check_step" ]; then
-  echo "FAIL: the \`Check the macOS deployment target\` steps differ (< $release, > $check)" >&2
-  diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
-  if [ "$release_rows" = "$check_rows" ]; then
-    echo "" >&2
-    echo "Give both workflows the same step text." >&2
-    exit 1
+if [ "$release_rows" != "$check_rows" ]; then
+  failures=$((failures + 1))
+  echo "FAIL: the build matrices differ (target, runner, cross)" >&2
+  only_release=$(comm -23 <(printf '%s\n' "$release_rows") <(printf '%s\n' "$check_rows"))
+  only_check=$(comm -13 <(printf '%s\n' "$release_rows") <(printf '%s\n' "$check_rows"))
+  if [ -n "$only_release" ]; then
+    echo "  only in $release:" >&2
+    printf '%s\n' "$only_release" | sed 's/^/    /' >&2
   fi
+  if [ -n "$only_check" ]; then
+    echo "  only in $check:" >&2
+    printf '%s\n' "$only_check" | sed 's/^/    /' >&2
+  fi
+  echo "  Give both workflows the same \`matrix.include\` rows. A target the release builds has to build on a release branch first." >&2
 fi
 
-echo "FAIL: the build matrices differ (target, runner, cross)" >&2
-only_release=$(comm -23 <(printf '%s\n' "$release_rows") <(printf '%s\n' "$check_rows"))
-only_check=$(comm -13 <(printf '%s\n' "$release_rows") <(printf '%s\n' "$check_rows"))
-if [ -n "$only_release" ]; then
-  echo "  only in $release:" >&2
-  printf '%s\n' "$only_release" | sed 's/^/    /' >&2
-fi
-if [ -n "$only_check" ]; then
-  echo "  only in $check:" >&2
-  printf '%s\n' "$only_check" | sed 's/^/    /' >&2
-fi
-cat >&2 <<'EOF'
+for name in "${shared_steps[@]}"; do
+  release_step=$(step_text "$release" "$name")
+  check_step=$(step_text "$check" "$name")
+  if [ "$release_step" != "$check_step" ]; then
+    failures=$((failures + 1))
+    echo "FAIL: the \`$name\` steps differ (< $release:$(step_line "$release" "$name"), > $check:$(step_line "$check" "$name"); diff lines count from each step's name line)" >&2
+    diff <(printf '%s\n' "$release_step") <(printf '%s\n' "$check_step") >&2 || true
+    echo "  Give both workflows the same step text." >&2
+  fi
+done
 
-Give both workflows the same `matrix.include` rows. A target the release builds
-has to build on a release branch first.
-EOF
-exit 1
+cache_key() {
+  step_text "$1" "Cache dependencies" | grep -E '^[[:space:]]+(key|env-vars):' || true
+}
+release_key=$(cache_key "$release")
+check_key=$(cache_key "$check")
+if [ "$release_key" != "$check_key" ]; then
+  failures=$((failures + 1))
+  echo "FAIL: the \`Cache dependencies\` steps differ in key or env-vars (< $release, > $check)" >&2
+  diff <(printf '%s\n' "$release_key") <(printf '%s\n' "$check_key") >&2 || true
+  echo "  Give both steps the same key and env-vars, so the check's runs refresh the caches the release restores." >&2
+fi
+
+for wf in "$release" "$check"; do
+  if [ "$(minos_side "$wf")" = before ]; then
+    failures=$((failures + 1))
+    echo "FAIL: $wf runs \`Check the macOS deployment target\` before \`Build release\`, so it never reads what this run builds" >&2
+    echo "  Move the step after \`Build release\` in the build job." >&2
+  fi
+done
+
+if [ "$failures" -gt 0 ]; then
+  exit 1
+fi
+
+echo "OK: $check builds the same $(printf '%s\n' "$check_rows" | wc -l | tr -d ' ') rows as $release, with the same ${#shared_steps[@]} shared steps and cache key"

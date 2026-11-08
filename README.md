@@ -226,10 +226,39 @@ jobs:
 
 ### `rust-release.yml`
 
-Full release pipeline: version check, audit, cross-platform build (7 targets — 5 hard-required, 2 linux-musl rows
+Full release pipeline: version check, audit, cross-platform build (7 targets: 5 hard-required, 2 linux-musl rows that
 soft-fail by default), crates.io publish (Trusted Publishing OIDC), a published GitHub Release not yet marked latest
 (notes extracted from the changelog the `changelog` input names, the repository root's `CHANGELOG.md` by default),
 Homebrew dispatch.
+
+The `tag` input names the release, and no step reads the run's ref. A caller dispatches the release onto `main` from the
+tag push. A run restores caches from its own ref and the default branch, and a run on a tag saves into the tag's scope,
+which no later run reads, so only a release on `main` saves caches the next release restores. In the dispatched run the
+ref names `main`, so `validate-inputs` checks the tag before anything builds: it refuses a tag that does not match
+`^v[0-9]+\.[0-9]+\.[0-9]+$`, a run on any ref but the default branch or the tag's own, a tag the repository does not
+have, and a tag whose commit is not the commit the run builds, which is `main`'s head.
+`scripts/check-release-tag-source.sh` fails this repo's lint run when the workflow reads `github.ref*`,
+`github.event.ref`, or `GITHUB_REF*`, except the one line where `validate-inputs` reads the ref for that check, or when
+its release step sets no `tag_name`, which defaults to the ref.
+
+The build links the caches it restores into the binaries it attests, so whatever can write those caches is inside the
+release's trust boundary. On the default branch that is every job that runs there, the release-matrix check included,
+which saves under the release's keys on purpose; a caller treats any job on its default branch as able to change what a
+release ships. On the tag's own ref it is the tagged tree's workflows. Any other branch's caches can be written by
+whoever pushes the branch, so a release on one stops as `release-ref-untrusted`.
+
+The builds and the SBOM start once the inputs pass, beside the version check and the audits. Signing waits for all of
+them and publishing waits for signing, so a failed version check or blocking audit signs and publishes nothing; a failed
+advisories audit does not block. A failed required build row cancels the others, and `gh run rerun <id> --failed` builds
+them again. Before it publishes, `publish-crate` waits up to ten minutes for each workspace member the crate depends on
+to reach crates.io at the declared bound, so a library tag pushed beside the binary's publishes first. The crate
+publishes with `cargo publish --no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`,
+which runs `cargo publish --dry-run --workspace`, on pull requests into the branch it tags, so the compile the publish
+skips has passed on that tree.
+
+On a cross row, `cross` asks `cargo metadata` on the host before it starts its image, and builds on the host when that
+call fails. The row runs `cargo fetch --locked` first, and fails whenever `cross` prints its fallback note, even when
+the host build passes, since that build links against the runner's libraries rather than the image's.
 
 The release is published rather than drafted because `brew pr-pull` finds it by tag through
 `GET /repos/{owner}/{repo}/releases/tags/{tag}`, which returns no drafts, and on that 404 creates a second release for
@@ -248,54 +277,192 @@ newer than the deployment target.
 With `attest: true`, the archives the build jobs produced and `sha256sum.txt` are attested with build provenance, and a
 CycloneDX SBOM of the binary is attested against the archives, before anything is published: a failed attestation
 publishes no crate and no release. Once the release exists, every published file is verified against its attestation,
-and the Homebrew dispatch goes out only when that passes. The signing job runs no code from the caller's repository; the
-SBOM is generated in a job of its own with a read-only token. This workflow is the signer, so a release verifies with
-`gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
+all at once, and the Homebrew dispatch goes out only when every check passes. The signing job runs no code from the
+caller's repository; the SBOM is generated in a job of its own with a read-only token. This workflow is the signer, so a
+release verifies with `gh attestation verify <archive> --repo <owner>/<repo> --signer-workflow
 brettdavies/.github/.github/workflows/rust-release.yml`.
+
+In a release dispatched onto `main`, the attestation's certificate names `refs/heads/main` as its source ref and
+`workflow_dispatch` as its trigger. Its source digest is the tagged commit, which `validate-inputs` holds the run to.
+`--signer-workflow` checks the signer, not the source ref, so the command above verifies a dispatched release and one
+run on its tag alike.
 
 A caller whose Homebrew formula installs the release's archives, rather than building the tagged source, needs
 `attest: true`. `brettdavies/homebrew-tap` verifies each archive such a formula names against its attestation, with this
 workflow as the signer, before it pins the checksum, and stops the formula bump when an archive has none.
 
-|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| **Inputs**                      | `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives), `macos_deployment_target` (string, optional, default `15.0`; the oldest macOS the darwin binaries run on) |
-| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit — not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Trigger**                     | `workflow_call`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Inputs**                      | `tag` (string, required; `v<major>.<minor>.<patch>`, an existing tag at the commit the run builds), `crate` (string, required), `bin` (string, required), `linux_musl_required` (bool, optional, default `false`), `linux_musl_verify_alpine` (bool, optional, default `false`), `changelog` (string, optional, default the repository root's `CHANGELOG.md`), `artifact_name` (string, optional, default the crate name), `attest` (bool, optional, default `false`; build-provenance and SBOM attestations for the release archives), `macos_deployment_target` (string, optional, default `15.0`; the oldest macOS the darwin binaries run on) |
+| **Secrets**                     | `CI_RELEASE_TOKEN` (required, explicit, not inherited)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
-**Caller example:**
+**Caller example:** the tag push compiles nothing and dispatches the release onto `main`, which needs `actions: write`.
+A caller that releases on the tag push itself passes `tag: ${{ github.ref_name }}`, and its run saves its caches where
+no later release reads them. The `run-name` titles the dispatched run `Release <tag>` and the tag push's run
+`Dispatch <tag>`, and the dispatch job's notice gives the command that lists the release run. When the dispatch job
+fails, that command shows whether the release started before anyone dispatches it by hand.
 
 ```yaml
 name: Release
+run-name: ${{ github.event_name == 'push' && 'Dispatch' || 'Release' }} ${{ inputs.tag || github.ref_name }}
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release tag, v<major>.<minor>.<patch>'
+        required: true
+        type: string
 permissions:
   contents: write
   id-token: write
 jobs:
+  dispatch:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the release onto main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
+          echo "::notice title=release-dispatched::Release ${TAG} runs on main: gh run list --repo ${GITHUB_REPOSITORY} --workflow release.yml --event workflow_dispatch --limit 1 --json displayTitle,status,url"
   pipeline:
+    if: github.event_name == 'workflow_dispatch'
     uses: brettdavies/.github/.github/workflows/rust-release.yml@main
     with:
+      tag: ${{ inputs.tag }}
       crate: bird
       bin: bird
     secrets:
       CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
 ```
 
+#### Migrating a caller
+
+A caller that passes no `tag` fails at startup, before any job runs, so nothing builds or publishes. To move one over:
+
+1. Pass the tag. `tag: ${{ inputs.tag || github.ref_name }}` serves a caller that releases on its tag push and one that
+   dispatches the release, as the example above does.
+2. Require `rust-ci.yml`'s `Package check` on pull requests into the branch you tag. `publish-crate` compiles nothing, so
+   without that check a crate that does not build from its package can publish.
+3. Merge the caller change before pushing the next `v*` tag. A tag runs the caller at its own commit.
+
+A tag pushed before the change merged cannot be released as it stands. A dispatch onto `main` refuses it as
+`release-tag-moved`, because `main` carries the change and the tag does not, and a dispatch onto the tag runs a caller
+that takes no `workflow_dispatch`. Nothing was published, so move the tag onto the merged commit,
+`git tag -fa vX.Y.Z -m vX.Y.Z <commit> && git push --force origin vX.Y.Z`, or release the next patch.
+
+#### When a release stops
+
+Each refusal is an error annotation titled with its code. The annotation names the values that caused it, says what was
+built or published, and gives the command that recovers, with the run's id, repository, and caller filled in; a
+command that still holds a `<placeholder>` is one to finish first. `scripts/check-release-error-docs.sh` fails this
+repo's lint run when a coded annotation links no heading below, or a heading this README lacks.
+
+##### `release-tag-invalid`
+
+The `tag` input is empty, or does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`: a branch name, a commit id, a tag without its
+`v`, or a library's `<crate>-v<version>` tag, which its `rust-lib-release.yml` caller releases. Nothing was built or
+published. An empty tag means the caller passes none; see [Migrating a caller](#migrating-a-caller). Otherwise a tag push
+may already have started the release, and the annotation's `gh run list` shows it. When none did, dispatch again with
+the binary's tag, which the annotation fills in when the input names it, as `4.6.0` or `refs/tags/v4.6.0` does.
+
+##### `release-ref-untrusted`
+
+The run is on a ref other than the default branch or `refs/tags/<tag>`, such as a feature branch whose head is the tag's
+commit. Nothing was built or published. A run restores its own ref's caches, and anyone who pushes a branch can write
+that branch's, so a release from it could ship and attest code the tag does not carry. Dispatch onto the default branch
+once its head is the tag's commit, or onto the tag's own ref; the annotation gives both commands.
+
+##### `release-tag-missing`
+
+The repository has no tag of that name, or the tag names something other than a commit. Nothing was built or published.
+Push the tag on the commit to release. In a caller that dispatches the release from its tag push, as the example above
+does, that push starts the release, and dispatching by hand as well would start a second one. A tag that names a tree or
+a blob moves onto the commit with `git tag -fa`, pushed with `--force`.
+
+##### `release-tag-unreadable`
+
+GitHub's API did not answer a read of the tag, of the tag object an annotated tag names, or of the comparison between
+the tag's commit and the run's. Nothing was built or published. A 403 means the caller's job grants no `contents: read`;
+for another status, `gh run rerun <id>` runs the check again.
+
+##### `release-tag-moved`
+
+The tag's commit is not the commit the run builds, and the run's commit descends from it: the branch the release was
+dispatched onto moved past the tag after it was pushed. Nothing was built or published.
+`gh workflow run <caller> --ref <tag> -f tag=<tag>` releases from the tag's own ref, which builds the tagged commit and
+saves no cache a later release restores. That dispatch needs the caller at the tag's commit to take `workflow_dispatch`;
+a tag pushed before its caller did is covered under [Migrating a caller](#migrating-a-caller).
+
+##### `release-tag-off-branch`
+
+The tag's commit is not in the history of the commit the run builds: the tag was cut on another branch, or on a local
+commit the branch never received. Nothing was built or published. The annotation gives no command, because releasing the
+tag as it stands would publish a commit the branch does not carry. A person decides which commit is the release: move
+the tag onto the branch, or merge the tag's commit into it, then push the tag again.
+
+##### `release-version-mismatch`
+
+The version in the tag is not the one the crate's `Cargo.toml` declares at the tagged commit, most often a version bump
+left out of the release. Nothing is signed or published, but the builds started beside the check and run to the end;
+`gh run cancel <id>` stops them. Then bump the version and tag the commit that carries it, or move the tag onto a commit
+whose version matches.
+
+##### `cross-host-fallback`
+
+`cross` fell back to building a row on the host; the annotation quotes the warning it printed first, which is the cause.
+Nothing was published. `gh run rerun <id> --failed` builds that row again, with the rows fail-fast cancelled, on the
+version of this workflow the first attempt ran. When the fix is a change to this repository, `gh run rerun <id>` runs
+every job on the current version, which is safe because nothing was published. When the row fails again with the same
+warning, the cause is the runner or the image, not a passing fault: the caller's `rust-release-matrix-check.yml` caller
+reproduces it outside a release. A matrix check that fails the same way goes to an issue on `brettdavies/.github`
+quoting the warning.
+
+##### `library-wait-timeout`
+
+A workspace member the crate depends on was not on crates.io at its bound ten minutes after `publish-crate` started,
+because the library's own release is still running, failed, or was never tagged. Nothing was published, and the builds
+and attestations are kept. The annotation names the library's tag, `<crate>-v<version>`, with the `gh run list` that
+shows its release run, and the step prints cargo's last answer for each library, which tells an index or network
+failure apart from a version not yet published. A tag with no run was never pushed: push it on the release's commit.
+Once the library's release run is green, `gh run rerun <id> --failed` runs `publish-crate` and the jobs after it.
+
+##### `attestation-verify-failed`
+
+A published file did not verify against the attestation `attest` made for it. It is the one refusal that comes after
+publishing: the crate is on crates.io and the GitHub Release exists, but the Homebrew dispatch did not go out, so the
+release is not marked latest. Each failed check's output is in its own log group. `gh run rerun <id> --failed` runs the
+checks and the dispatch again, which clears an outage of GitHub's attestation API. A second failure means a published
+file is not the one that was signed: dispatch nothing to Homebrew by hand, and escalate.
+
 ### `rust-release-matrix-check.yml`
 
-Builds the seven targets `rust-release.yml` builds, and releases nothing. The release build runs only on a tag push, so
-without this a dependency that breaks a cross-compiled target is found while cutting the release, after the tag exists.
+Builds the seven targets `rust-release.yml` builds, and releases nothing. The release build runs only once its tag exists,
+so without this a dependency that breaks a cross-compiled target is found while cutting the release, after the tag exists.
 A caller runs it when its dependency graph or toolchain pin changes and on every release branch.
 
 Every row is hard-fail, including the two linux-musl rows the release soft-fails by default. For a caller whose release
 passes `linux_musl_required: true`, a red row here means the release would fail on the same row.
 
-The matrix holds the same rows as the release build's, and the same deployment-target check on the darwin rows.
-`scripts/check-release-matrix-parity.sh` compares the two by target, runner, and cross flag, and the check step line by
-line. It fails this repo's lint run when they differ, or when either build job runs that step before `Build release`.
+The matrix holds the same rows as the release build's, and the same steps that install and run `cross`, build, and
+check the deployment target on the darwin rows. `scripts/check-release-matrix-parity.sh` compares the rows by target,
+runner, and cross flag, those steps line by line, and the two `Cache dependencies` steps' `key` and `env-vars`. It fails
+this repo's lint run when they differ, or when either build job runs the deployment-target check before `Build release`.
+
+The build cache takes the release's key, so a run on `main` restores the release's caches, which keeps them from
+expiring, and rebuilds and saves them when they have. Only a run on `main` saves, and a failed row saves nothing. A
+caller that releases from `main` runs the check there on a weekly `schedule`, which covers GitHub's seven-day expiry. It
+does not cover eviction: once a repository's caches pass its 10 GB limit, GitHub deletes the least recently used first,
+and a release's caches touched once a week are among them. A caller keeps them by pruning the caches its other refs no
+longer use.
 
 |                                 |                                                                                              |
 | ------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -313,6 +480,8 @@ per repo.
 name: Release matrix check
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
   pull_request:
     paths:
       - Cargo.toml
@@ -336,6 +505,10 @@ jobs:
 Release pipeline for a library crate in a workspace: version check against the crate's own `Cargo.toml`, audit,
 `cargo publish -p <crate>` (Trusted Publishing OIDC), GitHub Release (notes extracted from the changelog beside the
 crate, `make_latest: false` so the binary's release stays the repository's latest). No binaries, no Homebrew.
+
+The publish runs with `--no-verify`, which compiles nothing. The caller requires `rust-ci.yml`'s `Package check`, which
+runs `cargo publish --dry-run --workspace`, on pull requests into the branch it tags, so the compile the publish skips
+has passed on that tree. A `dry_run` rehearsal keeps the compile.
 
 |                                 |                                                                                                                                                                              |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
