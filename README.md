@@ -235,10 +235,17 @@ The `tag` input names the release, and no step reads the run's ref. A caller dis
 tag push. A run restores caches from its own ref and the default branch, and a run on a tag saves into the tag's scope,
 which no later run reads, so only a release on `main` saves caches the next release restores. In the dispatched run the
 ref names `main`, so `validate-inputs` checks the tag before anything builds: it refuses a tag that does not match
-`^v[0-9]+\.[0-9]+\.[0-9]+$`, a tag the repository does not have, and a tag whose commit is not the commit the run
-builds, which is `main`'s head. `scripts/check-release-tag-source.sh` fails this repo's lint run when the workflow reads
-`github.ref*`, `github.event.ref`, or `GITHUB_REF*`, or when its release step sets no `tag_name`, which defaults to the
-ref.
+`^v[0-9]+\.[0-9]+\.[0-9]+$`, a run on any ref but the default branch or the tag's own, a tag the repository does not
+have, and a tag whose commit is not the commit the run builds, which is `main`'s head.
+`scripts/check-release-tag-source.sh` fails this repo's lint run when the workflow reads `github.ref*`,
+`github.event.ref`, or `GITHUB_REF*`, except the one line where `validate-inputs` reads the ref for that check, or when
+its release step sets no `tag_name`, which defaults to the ref.
+
+The build links the caches it restores into the binaries it attests, so whatever can write those caches is inside the
+release's trust boundary. On the default branch that is every job that runs there, the release-matrix check included,
+which saves under the release's keys on purpose; a caller treats any job on its default branch as able to change what a
+release ships. On the tag's own ref it is the tagged tree's workflows. Any other branch's caches can be written by
+whoever pushes the branch, so a release on one stops as `release-ref-untrusted`.
 
 The builds and the SBOM start once the inputs pass, beside the version check and the audits. Signing waits for all of
 them and publishing waits for signing, so a failed version check or blocking audit signs and publishes nothing; a failed
@@ -366,6 +373,13 @@ The `tag` input is empty, or does not match `^v[0-9]+\.[0-9]+\.[0-9]+$`: a branc
 published. An empty tag means the caller passes none; see [Migrating a caller](#migrating-a-caller). Otherwise a tag push
 may already have started the release, and the annotation's `gh run list` shows it. When none did, dispatch again with
 the binary's tag, which the annotation fills in when the input names it, as `4.6.0` or `refs/tags/v4.6.0` does.
+
+##### `release-ref-untrusted`
+
+The run is on a ref other than the default branch or `refs/tags/<tag>`, such as a feature branch whose head is the tag's
+commit. Nothing was built or published. A run restores its own ref's caches, and anyone who pushes a branch can write
+that branch's, so a release from it could ship and attest code the tag does not carry. Dispatch onto the default branch
+once its head is the tag's commit, or onto the tag's own ref; the annotation gives both commands.
 
 ##### `release-tag-missing`
 

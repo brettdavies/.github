@@ -155,6 +155,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           CALLER: ${{ github.workflow_ref }}
+          RUN_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DOCS: https://github.com/brettdavies/.github/blob/main/README.md
         run: |
           set -euo pipefail
@@ -180,6 +182,18 @@ jobs:
             [[ "$want" =~ ^[0-9] ]] && want="v${want}"
             [[ "$want" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || want="<tag>"
             echo "::error title=release-tag-invalid::tag '$(esc "$TAG")' is not a release tag: it must match ^v[0-9]+\.[0-9]+\.[0-9]+$, the form the binary's releases are tagged in. Nothing was built or published. A tag push may already have started the release, as ${runs} shows; if none did, dispatch with the binary's tag: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${want} -f tag=${want}. See ${DOCS}#release-tag-invalid"
+            exit 1
+          fi
+          # A run restores its own ref's caches as well as the default
+          # branch's, and links them into what it attests. Only reviewed code
+          # runs on the default branch, and only the tagged tree on the tag's
+          # ref; any other branch's caches can be written by whoever pushes it.
+          if [ -z "${DEFAULT_BRANCH:-}" ]; then
+            DEFAULT_BRANCH=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2> "$err") \
+              || unreadable "read the default branch"
+          fi
+          if [ "$RUN_REF" != "refs/heads/${DEFAULT_BRANCH}" ] && [ "$RUN_REF" != "refs/tags/${TAG}" ]; then
+            echo "::error title=release-ref-untrusted::this run is on $(esc "$RUN_REF"), and a release runs only on refs/heads/${DEFAULT_BRANCH} or on refs/tags/${TAG}: the build restores its ref's caches, and on any other branch they can be written by whoever pushes it. Nothing was built or published. Dispatch onto ${DEFAULT_BRANCH} once its head is the tag's commit: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${DEFAULT_BRANCH} -f tag=${TAG}; or onto the tag: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-ref-untrusted"
             exit 1
           fi
           if ! object=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha' 2> "$err"); then

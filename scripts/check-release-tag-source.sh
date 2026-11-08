@@ -5,7 +5,8 @@
 # (`github.ref`, `github.ref_name`, `github.event.ref`, `GITHUB_REF`,
 # `GITHUB_REF_NAME`, or any other `github.ref*`, `github.event.ref*`, or
 # `GITHUB_REF*` field), or when one of its `softprops/action-gh-release` steps
-# sets no `tag_name`.
+# sets no `tag_name`. validate-inputs may read `github.ref` into `RUN_REF` on
+# that one line, to refuse a run on any ref but the default branch or the tag.
 #
 # Why the rule exists: a caller dispatches the release onto its default branch,
 # so the build restores that branch's caches, and in that run the ref names the
@@ -47,6 +48,11 @@ refs=$(grep -nE 'github\.(event\.)?ref|GITHUB_REF' "$wf" | grep -vE '^[0-9]+:[[:
 while IFS= read -r hit; do
   [ -n "$hit" ] || continue
   line="${hit%%:*}"
+  # The one read allowed: validate-inputs refuses a run on any ref but the
+  # default branch or the tag's own, so it reads the ref into RUN_REF.
+  if [[ "${hit#*:}" =~ ^[[:space:]]+RUN_REF:\ \$\{\{\ github\.ref\ \}\}$ ]] && [ "$(job_at "$line")" = validate-inputs ]; then
+    continue
+  fi
   hint=""
   if [ "$(job_at "$line")" = validate-inputs ]; then
     hint=" (validate-inputs checks the tag, so it reads inputs.tag)"
