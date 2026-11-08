@@ -65,6 +65,17 @@ jobs:
       - name: Check the release workflow's tag source
         run: bash scripts/check-release-tag-source.sh
 
+  # Holds each coded error annotation to a README heading. GitHub opens a link
+  # whose heading is gone at the top of the page, so only this check reports
+  # a renamed one.
+  release-error-docs:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the error annotations' docs links
+        run: bash scripts/check-release-error-docs.sh
+
   # Holds the search-presence gate to the permission, token, and exit
   # properties that no run in this repository exercises.
   search-presence-contract:

@@ -355,7 +355,8 @@ that takes no `workflow_dispatch`. Nothing was published, so move the tag onto t
 
 Each refusal is an error annotation titled with its code. The annotation names the values that caused it, says what was
 built or published, and gives the command that recovers, with the run's id, repository, and caller filled in; a
-command that still holds a `<placeholder>` is one to finish first.
+command that still holds a `<placeholder>` is one to finish first. `scripts/check-release-error-docs.sh` fails this
+repo's lint run when a coded annotation links no heading below, or a heading this README lacks.
 
 ##### `release-tag-invalid`
 

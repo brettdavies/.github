@@ -56,6 +56,7 @@ fi
 
 bash scripts/check-workflow-concurrency.sh
 bash scripts/check-release-matrix-parity.sh
+bash scripts/check-release-error-docs.sh
 
 if command -v yq >/dev/null 2>&1; then
   bash scripts/check-search-presence-workflow.sh
