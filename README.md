@@ -292,10 +292,10 @@ workflow as the signer, before it pins the checksum, and stops the formula bump 
 | **Required caller permissions** | `contents: write`, `id-token: write`; with `attest: true`, also `attestations: write`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 **Caller example:** the tag push compiles nothing and dispatches the release onto `main`, which needs `actions: write`.
-A caller that releases on the tag push itself passes `tag: ${{ github.ref_name }}` and builds on cold caches. The
-`run-name` titles the dispatched run `Release <tag>` and the tag push's run `Dispatch <tag>`, and the dispatch job's
-notice gives the command that lists the release run. When the dispatch job fails, that command shows whether the release
-started before anyone dispatches it by hand.
+A caller that releases on the tag push itself passes `tag: ${{ github.ref_name }}`, and its run saves its caches where
+no later release reads them. The `run-name` titles the dispatched run `Release <tag>` and the tag push's run
+`Dispatch <tag>`, and the dispatch job's notice gives the command that lists the release run. When the dispatch job
+fails, that command shows whether the release started before anyone dispatches it by hand.
 
 ```yaml
 name: Release
@@ -384,9 +384,9 @@ for another status, `gh run rerun <id>` runs the check again.
 
 The tag's commit is not the commit the run builds, and the run's commit descends from it: the branch the release was
 dispatched onto moved past the tag after it was pushed. Nothing was built or published.
-`gh workflow run <caller> --ref <tag> -f tag=<tag>` releases from the tag's own ref, which builds the tagged commit on
-cold caches. That dispatch needs the caller at the tag's commit to take `workflow_dispatch`; a tag pushed before its
-caller did is covered under [Migrating a caller](#migrating-a-caller).
+`gh workflow run <caller> --ref <tag> -f tag=<tag>` releases from the tag's own ref, which builds the tagged commit and
+saves no cache a later release restores. That dispatch needs the caller at the tag's commit to take `workflow_dispatch`;
+a tag pushed before its caller did is covered under [Migrating a caller](#migrating-a-caller).
 
 ##### `release-tag-off-branch`
 

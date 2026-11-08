@@ -205,7 +205,7 @@ jobs:
             status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${sha}...${GITHUB_SHA}" --jq .status 2> "$err") \
               || unreadable "compare tag ${TAG}'s commit ${sha} with ${GITHUB_SHA}"
             if [ "$status" = ahead ]; then
-              echo "::error title=release-tag-moved::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}, which descends from it: the branch it was dispatched onto has moved past the tag. Nothing was built or published. Release from the tag's own ref, on cold caches: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-moved"
+              echo "::error title=release-tag-moved::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}, which descends from it: the branch it was dispatched onto has moved past the tag. Nothing was built or published. Release from the tag's own ref: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-moved"
             else
               echo "::error title=release-tag-off-branch::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}, which does not descend from it (GitHub compares them as $(esc "$status")): the tag is not on the branch the release was dispatched onto. Nothing was built or published. Releasing the tag would publish a commit that branch does not carry, so a person decides which commit is the release: move the tag onto the branch, or merge its commit into the branch, then push the tag again. See ${DOCS}#release-tag-off-branch"
             fi
