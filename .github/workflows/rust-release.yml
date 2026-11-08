@@ -143,34 +143,6 @@ jobs:
             exit 1
           fi
 
-      # `cargo publish -p <crate>` resolves a path dependency from the registry,
-      # so a workspace member the crate depends on must already be published
-      # at a version its bound accepts. Without this check the failure lands
-      # in publish-crate, after every target has built, with a resolver
-      # message that names no cause. A scratch manifest asks cargo the exact
-      # question the publish will ask.
-      - name: Verify workspace dependencies are published at the declared bounds
-        env:
-          CRATE: ${{ inputs.crate }}
-        run: |
-          set -euo pipefail
-          missing=""
-          while IFS=$'\t' read -r name req; do
-            [ -n "$name" ] || continue
-            probe="$(mktemp -d)"
-            mkdir -p "$probe/src"
-            : > "$probe/src/lib.rs"
-            printf '[package]\nname = "bound-probe"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\n%s = "%s"\n' "$name" "$req" > "$probe/Cargo.toml"
-            if ! cargo generate-lockfile --manifest-path "$probe/Cargo.toml" --quiet 2>/dev/null; then
-              missing="${missing} ${name}@${req}"
-            fi
-          done < <(cargo metadata --format-version 1 --no-deps \
-            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .dependencies[] | select(.path != null and (.kind == null or .kind == "build")) | "\(.name)\t\(.req)"')
-          if [ -n "$missing" ]; then
-            echo "::error title=check-version::${CRATE} depends on workspace member(s) not on crates.io at the declared bound:${missing}; publish the library tag and wait for its run to go green before tagging ${CRATE}"
-            exit 1
-          fi
-
   audit:
     needs: validate-inputs
     runs-on: ubuntu-22.04
@@ -584,6 +556,56 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      # `cargo publish -p <crate>` resolves a path dependency from the
+      # registry, so a workspace member the crate depends on must be on
+      # crates.io at a version its bound accepts. A library tag pushed beside
+      # this one publishes while this run builds, so the step waits for it
+      # rather than failing; a scratch manifest asks cargo the exact question
+      # the publish will ask. It runs before the token exchange, whose token
+      # would otherwise age through the wait.
+      - name: Wait for workspace dependencies on crates.io
+        env:
+          CRATE: ${{ inputs.crate }}
+          WAIT_SECONDS: 600
+          DOCS: https://github.com/brettdavies/.github/blob/main/README.md
+        run: |
+          set -euo pipefail
+          deps=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r --arg crate "$CRATE" '.packages[] | select(.name == $crate) | .dependencies[] | select(.path != null and (.kind == null or .kind == "build")) | "\(.name)\t\(.req)"')
+          if [ -z "$deps" ]; then
+            echo "${CRATE} depends on no workspace member; nothing to wait for."
+            exit 0
+          fi
+          probes="$(mktemp -d)"
+          while IFS=$'\t' read -r name req; do
+            mkdir -p "$probes/$name/src"
+            : > "$probes/$name/src/lib.rs"
+            printf '[package]\nname = "bound-probe"\nversion = "0.0.0"\nedition = "2021"\n\n[dependencies]\n%s = "%s"\n' "$name" "$req" > "$probes/$name/Cargo.toml"
+          done <<<"$deps"
+          deadline=$((SECONDS + WAIT_SECONDS))
+          next_log=$SECONDS
+          while :; do
+            missing=""
+            while IFS=$'\t' read -r name req; do
+              if ! cargo generate-lockfile --manifest-path "$probes/$name/Cargo.toml" --quiet 2>/dev/null; then
+                missing="${missing} ${name}@${req}"
+              fi
+            done <<<"$deps"
+            if [ -z "$missing" ]; then
+              echo "Every workspace member ${CRATE} depends on is on crates.io at its bound, after ${SECONDS}s."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error title=library-wait-timeout::${CRATE} depends on${missing}, still not on crates.io at that bound after ${WAIT_SECONDS}s. Nothing was published. Once the library's release run is green, continue this release with: gh run rerun ${GITHUB_RUN_ID} --failed --repo ${GITHUB_REPOSITORY}. See ${DOCS}#library-wait-timeout"
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$next_log" ]; then
+              echo "Waiting for${missing} on crates.io (${SECONDS}s of ${WAIT_SECONDS}s)"
+              next_log=$((SECONDS + 60))
+            fi
+            sleep 10
+          done
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
