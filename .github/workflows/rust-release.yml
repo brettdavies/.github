@@ -2,11 +2,13 @@
 # Builds cross-platform binaries, publishes to crates.io, creates GitHub
 # Release, and dispatches Homebrew formula update.
 #
-# Caller example:
+# Caller example (README.md § rust-release.yml has the full caller, which
+# dispatches the release onto main from the tag push):
 #   jobs:
 #     pipeline:
 #       uses: brettdavies/.github/.github/workflows/rust-release.yml@main
 #       with:
+#         tag: ${{ inputs.tag }}
 #         crate: bird
 #         bin: bird
 #         linux_musl_required: true       # optional, default false
@@ -15,6 +17,20 @@
 #         attest: true                    # optional, default false
 #       secrets:
 #         CI_RELEASE_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
+#
+# The `tag` input names the release, and no step reads the run's ref, which
+# names the branch when the caller dispatches the release onto it to restore
+# that branch's caches. validate-inputs refuses a tag that is not
+# v<major>.<minor>.<patch>, one that does not exist, and one whose commit is not
+# the commit the run builds, before anything builds.
+#
+# The builds start beside the version check, the audits, and the SBOM, and
+# signing and publishing wait for all of them. A failed required build row
+# cancels the others. Before it publishes, the crate waits up to ten minutes for
+# every workspace member it depends on to reach crates.io at its bound, so a
+# library tag pushed beside this one publishes first. The publish skips the
+# verify compile: the caller runs `cargo publish --dry-run` in the pull-request
+# gate the tagged tree merged through.
 #
 # Build matrix is 7 targets: x86_64/aarch64 linux-gnu, x86_64/aarch64 linux-musl,
 # x86_64/aarch64 darwin, x86_64 windows-msvc. The two musl rows soft-fail by
@@ -41,6 +57,10 @@ name: Rust Release
 on:
   workflow_call:
     inputs:
+      tag:
+        description: "The release tag, `v<major>.<minor>.<patch>`. It must exist and point at the commit the run checked out: a caller that dispatches the release onto its default branch passes the tag it was dispatched for, and one that runs on the tag push passes the pushed tag."
+        type: string
+        required: true
       crate:
         description: "Crate name (e.g., bird, xurl-rs)"
         type: string
@@ -100,6 +120,9 @@ jobs:
     name: Validate inputs
     runs-on: ubuntu-22.04
     timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - name: Validate crate, bin, and artifact names
         env:
@@ -120,6 +143,55 @@ jobs:
             exit 1
           fi
 
+      # A dispatched run takes its tag as an input, which no tag pattern
+      # filters, and builds the commit of the ref it was dispatched onto. The
+      # tag has to be a release tag that exists and names that commit, or the
+      # archives would carry another commit's code under the tag's name. A
+      # dispatch onto a branch that has moved past the tag is refused here,
+      # before anything builds.
+      - name: Resolve the tag to the commit this run builds
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          CALLER: ${{ github.workflow_ref }}
+          DOCS: https://github.com/brettdavies/.github/blob/main/README.md
+        run: |
+          set -euo pipefail
+          caller="${CALLER%%@*}"
+          caller="${caller##*/}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=release-tag-invalid::tag '${TAG}' is not a release tag: it must match ^v[0-9]+\.[0-9]+\.[0-9]+$, the form the binary's releases are tagged in. Nothing was built or published. Dispatch with the binary's tag: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref <tag> -f tag=<tag>. See ${DOCS}#release-tag-invalid"
+            exit 1
+          fi
+          err="$RUNNER_TEMP/tag-resolve.err"
+          if ! object=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha' 2> "$err"); then
+            if grep -q 'HTTP 404' "$err"; then
+              echo "::error title=release-tag-missing::${GITHUB_REPOSITORY} has no tag ${TAG}. Nothing was built or published. Push the tag, then dispatch with it: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-missing"
+              exit 1
+            fi
+            cat "$err" >&2
+            echo "::error::could not read tag ${TAG} from ${GITHUB_REPOSITORY}: $(head -n 1 "$err")"
+            exit 1
+          fi
+          read -r type sha <<<"$object"
+          # An annotated tag names a tag object, which names the commit.
+          while [ "$type" = tag ]; do
+            object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.type + " " + .object.sha')
+            read -r type sha <<<"$object"
+          done
+          if [ "$type" != commit ]; then
+            echo "::error title=release-tag-missing::tag ${TAG} names a ${type}, not a commit. Nothing was built or published. See ${DOCS}#release-tag-missing"
+            exit 1
+          fi
+          if [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "::error title=release-tag-moved::tag ${TAG} is commit ${sha}, and this run builds ${GITHUB_SHA}: the branch it was dispatched onto has moved past the tag. Nothing was built or published. Release from the tag's own ref, on cold caches: gh workflow run ${caller} --repo ${GITHUB_REPOSITORY} --ref ${TAG} -f tag=${TAG}. See ${DOCS}#release-tag-moved"
+            exit 1
+          fi
+          echo "Releasing ${TAG}, commit ${sha}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
   check-version:
     needs: validate-inputs
     runs-on: ubuntu-22.04
@@ -130,8 +202,9 @@ jobs:
       - name: Verify tag matches the crate's Cargo.toml version
         env:
           CRATE: ${{ inputs.crate }}
+          TAG: ${{ needs.validate-inputs.outputs.tag }}
+          TAG_VERSION: ${{ needs.validate-inputs.outputs.version }}
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
           # `-p` names the package: a bare `cargo pkgid` errors on a workspace
           # root that is a virtual manifest. cargo pkgid output varies:
           # `path+file:///path#0.1.1` on some setups, `name@0.1.1` on others
@@ -139,7 +212,7 @@ jobs:
           # last `#` OR `@` so both shapes collapse to the bare version.
           CARGO_VERSION=$(cargo pkgid -p "$CRATE" | sed -E 's|.*[@#]||')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match ${CRATE} version ${CARGO_VERSION}"
+            echo "::error::Tag ${TAG} does not match ${CRATE} version ${CARGO_VERSION}"
             exit 1
           fi
 
@@ -649,7 +722,7 @@ jobs:
         run: cargo publish -p "$CRATE" --no-verify
 
   release:
-    needs: [build, publish-crate]
+    needs: [validate-inputs, build, publish-crate]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.publish-crate.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -662,6 +735,8 @@ jobs:
         id: changelog
         env:
           CHANGELOG_INPUT: ${{ inputs.changelog }}
+          TAG: ${{ needs.validate-inputs.outputs.tag }}
+          VERSION: ${{ needs.validate-inputs.outputs.version }}
         run: |
           # A single-crate repository keeps its changelog at the root, which is
           # the default. A workspace whose member keeps its own beside its
@@ -677,9 +752,9 @@ jobs:
           # landed, or an '## [Unreleased]' block at the top, would otherwise
           # ship the wrong section silently. check-version has already verified
           # the tag matches the crate version.
-          NOTES=$(awk -v ver="${GITHUB_REF_NAME#v}" '/^## /{if(f)exit; if(index($0,ver))f=1} f' "$CHANGELOG")
+          NOTES=$(awk -v ver="$VERSION" '/^## /{if(f)exit; if(index($0,ver))f=1} f' "$CHANGELOG")
           if [ -z "$NOTES" ]; then
-            echo "::warning::No ${CHANGELOG} section for ${GITHUB_REF_NAME}; falling back to generated notes"
+            echo "::warning::No ${CHANGELOG} section for ${TAG}; falling back to generated notes"
             echo "generate=true" >> "$GITHUB_OUTPUT"
           fi
           {
@@ -717,9 +792,12 @@ jobs:
       # rust-finalize-release.yml. For a source-built formula that waits for
       # the bottles to upload, so the repository's latest release always has
       # them; a prebuilt formula installs this release's archives and has none.
+      # `tag_name` is set because the action otherwise takes the run's ref,
+      # which names the branch in a dispatched run.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ needs.validate-inputs.outputs.tag }}
           files: release/*
           body: ${{ steps.changelog.outputs.content }}
           generate_release_notes: ${{ steps.changelog.outputs.generate == 'true' }}
@@ -734,12 +812,13 @@ jobs:
   # out. Like `attest`, the job names no `permissions:` and takes the
   # caller's grant.
   verify-attestations:
-    needs: release
+    needs: [validate-inputs, release]
     if: ${{ inputs.attest }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.validate-inputs.outputs.tag }}
       # This file. `github.workflow_ref` names the caller inside a called
       # workflow, so the signer is spelled out.
       SIGNER: brettdavies/.github/.github/workflows/rust-release.yml
@@ -751,9 +830,9 @@ jobs:
         run: |
           mkdir release
           cd release
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern sha256sum.txt
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern sha256sum.txt
           awk '{ sub(/^\.\//, "", $2); print $2 }' sha256sum.txt | while read -r asset; do
-            gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$asset"
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$asset"
           done
           sha256sum --check sha256sum.txt
 
@@ -802,7 +881,7 @@ jobs:
           echo "All ${#pids[@]} attestation checks passed"
 
   homebrew:
-    needs: [release, verify-attestations]
+    needs: [validate-inputs, release, verify-attestations]
     if: ${{ !cancelled() && needs.release.result == 'success' && (needs.verify-attestations.result == 'success' || (!inputs.attest && needs.verify-attestations.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
@@ -810,7 +889,7 @@ jobs:
       - name: Dispatch Homebrew formula update
         env:
           GH_TOKEN: ${{ secrets.CI_RELEASE_TOKEN }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate-inputs.outputs.version }}
           CRATE: ${{ inputs.crate }}
           REPO: ${{ github.repository }}
         run: |
@@ -818,5 +897,5 @@ jobs:
             --method POST \
             -f event_type=update-formula \
             -f "client_payload[formula]=${CRATE}" \
-            -f "client_payload[version]=${VERSION#v}" \
+            -f "client_payload[version]=${VERSION}" \
             -f "client_payload[repo]=${REPO}"

@@ -61,8 +61,9 @@ if command -v yq >/dev/null 2>&1; then
   bash scripts/check-search-presence-workflow.sh
   bash scripts/check-rust-ci-jobs.sh
   bash scripts/check-workflow-job-names.sh
+  bash scripts/check-release-tag-source.sh
 else
-  echo "pre-push: yq not installed; skipping the search-presence workflow contract, the rust-ci job-id check, and the job-name check"
+  echo "pre-push: yq not installed; skipping the search-presence workflow contract, the rust-ci job-id check, the job-name check, and the release tag-source check"
 fi
 
 if command -v python3 >/dev/null 2>&1 && command -v yq >/dev/null 2>&1; then

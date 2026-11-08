@@ -26,8 +26,9 @@ if echo "$staged" | grep -qE '^\.github/workflows/.*\.ya?ml$'; then
     bash scripts/check-search-presence-workflow.sh
     bash scripts/check-rust-ci-jobs.sh
     bash scripts/check-workflow-job-names.sh
+    bash scripts/check-release-tag-source.sh
   else
-    echo "pre-commit: yq not installed; skipping the search-presence workflow contract, the rust-ci job-id check, and the job-name check"
+    echo "pre-commit: yq not installed; skipping the search-presence workflow contract, the rust-ci job-id check, the job-name check, and the release tag-source check"
   fi
 fi
 

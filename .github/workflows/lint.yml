@@ -54,6 +54,17 @@ jobs:
       - name: Check release matrix parity
         run: bash scripts/check-release-matrix-parity.sh
 
+  # Holds rust-release.yml to the tag it is given. In a dispatched release the
+  # run's ref names the branch, and no run in this repository releases, so only
+  # this check reports a step that reads it.
+  release-tag-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the release workflow's tag source
+        run: bash scripts/check-release-tag-source.sh
+
   # Holds the search-presence gate to the permission, token, and exit
   # properties that no run in this repository exercises.
   search-presence-contract:
