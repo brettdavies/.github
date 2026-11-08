@@ -185,12 +185,18 @@ jobs:
         with:
           command: check ${{ matrix.checks }}
 
+  # The builds wait only for the inputs, so they run beside the version check,
+  # the audits, and the SBOM; everything that signs or publishes waits for all
+  # of them. A failed required row cancels the rest, since the release cannot
+  # proceed without it, and `gh run rerun <id> --failed` builds them again. A
+  # soft-fail row's failure cancels nothing: its `continue-on-error` keeps it
+  # out of fail-fast.
   build:
-    needs: [check-version, audit]
+    needs: validate-inputs
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         # Every row declares `soft_fail` explicitly (true on the linux-musl
         # rows, false on every other row). Implicit "no soft_fail key →
@@ -243,7 +249,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -455,7 +461,7 @@ jobs:
   # read-only token; `attest` holds the signing permissions and runs only
   # GitHub's own actions over files other jobs produced.
   sbom:
-    needs: [check-version, audit]
+    needs: validate-inputs
     if: ${{ inputs.attest }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -514,7 +520,7 @@ jobs:
   # job here names it. The job takes the caller's grant instead, and a
   # caller that turns `attest` on grants it.
   attest:
-    needs: [build, sbom]
+    needs: [build, sbom, check-version, audit]
     if: ${{ inputs.attest }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -557,15 +563,17 @@ jobs:
             release/*.zip
           sbom-path: artifacts/sbom-${{ inputs.artifact_name || inputs.crate }}/${{ inputs.bin }}.cdx.json
 
-  # `attest` is skipped for a caller that leaves the input off, and a job
-  # whose ancestor was skipped is itself skipped unless its `if` names a
-  # status function. So this job and the two below state what they wait for:
-  # each runs when the jobs it needs succeeded. A skipped attestation job is
-  # nothing to wait for only when the input is off: with it on, `attest` is
-  # also skipped when `sbom` fails, and that must publish nothing.
+  # `sbom` and `attest` are skipped for a caller that leaves the input off,
+  # and a job whose ancestor was skipped is itself skipped unless its `if`
+  # names a status function. So this job and the two below state what they
+  # wait for: each runs when the jobs it needs succeeded. A skipped
+  # attestation job is nothing to wait for only when the input is off: with
+  # it on, `attest` is also skipped when a gate or `sbom` fails, and that must
+  # publish nothing. The advisories audit's `continue-on-error` leaves `audit`
+  # a success when only advisories fail.
   publish-crate:
-    needs: [build, attest]
-    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.attest.result == 'success' || (!inputs.attest && needs.attest.result == 'skipped')) }}
+    needs: [build, sbom, check-version, audit, attest]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.check-version.result == 'success' && needs.audit.result == 'success' && ((inputs.attest && needs.sbom.result == 'success' && needs.attest.result == 'success') || (!inputs.attest && needs.sbom.result == 'skipped' && needs.attest.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -575,7 +583,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
