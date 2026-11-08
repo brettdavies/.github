@@ -345,6 +345,10 @@ jobs:
       - name: Install cargo-binstall
         if: matrix.cross
         uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
+        # The pin fixes the action's script; the script downloads the latest
+        # release unless the version is named.
+        with:
+          version: 1.26.2
 
       - name: Install cross
         if: matrix.cross
