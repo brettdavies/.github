@@ -631,7 +631,7 @@ jobs:
       - name: Install cargo-binstall
         if: env.RUN_AUDIT == 'true'
         timeout-minutes: 1 # slowest healthy run: 1 s
-        uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
+        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
 
       # install-prebuilt installs a prebuilt binary only and is shared with
       # Install cargo-nextest. A stalled release-asset check costs binstall
@@ -771,7 +771,7 @@ jobs:
       - name: Install cargo-binstall
         if: env.RUN_STEPS == 'true' && !inputs.warm_cache
         timeout-minutes: 1 # slowest healthy run: 1 s
-        uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
+        uses: cargo-bins/cargo-binstall@851112458b5f28a29e5bc14a690c3f283d9dcc6f # v1.26.2
 
       # binstall's source fallback, which install-prebuilt disables, would
       # also run cargo install without --locked, which nextest refuses to
