@@ -23,6 +23,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
       pr-cache-cleanup.yml  # reusable delete of a closed pull request's Actions caches
+      rust-cache-prune.yml  # reusable delete of a branch's superseded rust-cache entries after a warm run
       search-presence.yml   # reusable post-deploy search regression gate for a site
       lint-basics.yml       # reusable actionlint, markdownlint, shellcheck, and plan frontmatter
       lint.yml              # internal: actionlint on push/PR
@@ -671,6 +672,49 @@ jobs:
     permissions:
       actions: write
     uses: brettdavies/.github/.github/workflows/pr-cache-cleanup.yml@main
+```
+
+### `rust-cache-prune.yml`
+
+Deletes a branch's superseded rust-cache entries after a warm CI run. A rust-cache key ends in a hash of the manifests,
+the lockfile, and the toolchain files, so each change to one of those leaves the branch holding the previous
+generation's caches beside the current ones. They count against the repository's 10 GB limit, and GitHub evicts the
+least recently used entries first, which can take the warm entries pull requests restore from. The job groups the
+branch's `v0-rust-*` entries by key minus the trailing hash and keeps one per group: the entry the run saved, else the
+most recently read. It deletes the rest with the job's token.
+
+- **A re-run after the branch moved on prunes nothing.** A re-run builds its original commit, so its caches are an older
+  generation's. The job compares the branch head with the run's commit first and exits 0 when they differ.
+- **A saved entry outranks a later read.** A pull request based on an earlier commit can restore the previous generation
+  after the run saved the current one, which would make the old entry the most recently read.
+- **"Saved by the run" counts every attempt.** It means created after the run's `created_at`, which stays at the first
+  attempt's time. `run_started_at` moves to each re-run's start, so re-running a failed job would rank the first
+  attempt's saves as old.
+- **Branch refs only.** On a pull request's or a tag's ref the job skips; pull requests' caches are
+  `pr-cache-cleanup.yml`'s.
+
+|                                 |                                              |
+| ------------------------------- | -------------------------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs)                  |
+| **Check name**                  | `<caller job key> / Prune superseded caches` |
+| **Required caller permissions** | `actions: write`, `contents: read`           |
+
+Call it from a job that `needs:` every job that saves a cache, and only after all of them finished: a job that failed or
+was cancelled saved nothing, so its key's newest entry would still be the old generation. Inside a called workflow
+`github.ref`, `github.sha`, and `github.run_id` are the caller's, so the job prunes the branch the caller ran on.
+
+**Caller example:**
+
+```yaml
+jobs:
+  # ... the jobs that save caches, here warm and windows ...
+  prune-caches:
+    needs: [warm, windows]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    permissions:
+      actions: write
+      contents: read
+    uses: brettdavies/.github/.github/workflows/rust-cache-prune.yml@main
 ```
 
 ### `search-presence.yml`

@@ -1,0 +1,89 @@
+# Reusable workflow that deletes a branch's superseded rust-cache entries after
+# a warm CI run.
+#
+# A rust-cache key ends in a hash of the manifests, the lockfile, and the
+# toolchain files, so every change to one of those leaves the branch holding the
+# previous generation's caches beside the current ones. They still count against
+# the repository's 10 GB limit, and GitHub evicts the least recently used
+# entries first, which can take the warm entries pull requests restore from.
+# This keeps one entry per key, the one the run saved, else the most recently
+# read, and deletes the rest. Pull requests' caches are pr-cache-cleanup.yml's.
+#
+# Call it from a job that needs every job that saves a cache, and only after all
+# of them finished: a job that failed or was cancelled saved nothing, so its
+# key's newest entry would be the old generation.
+#
+# Caller example:
+#   jobs:
+#     prune-caches:
+#       needs: [warm, windows]
+#       if: ${{ !cancelled() && github.event_name != 'pull_request' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+#       permissions:
+#         actions: write
+#         contents: read
+#       uses: brettdavies/.github/.github/workflows/rust-cache-prune.yml@main
+#
+# Required caller permissions: actions: write, contents: read
+name: Rust cache prune
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  prune:
+    name: Prune superseded caches
+    # A pull request's ref holds only that pull request's caches, which
+    # pr-cache-cleanup.yml deletes when it closes.
+    if: startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    # contents: read is for the branch head read; job-level permissions replace
+    # the workflow's, so it has to sit beside actions: write.
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      # Inside a called workflow the github context is the caller's, so REF,
+      # GITHUB_SHA, and GITHUB_RUN_ID name the caller's branch, commit, and run.
+      #
+      # A re-run builds its original commit, so once the branch has moved on,
+      # the caches it saved are an older generation's, and the step deletes
+      # nothing.
+      #
+      # A saved entry outranks a later read: a pull request whose merge commit
+      # predates the branch's last push can restore the previous generation
+      # after this run saved the current one. "Saved by this run" means created
+      # after the run's created_at, which stays at the first attempt's time,
+      # whereas run_started_at moves to each re-run's, so a re-run of failed jobs
+      # would rank the first attempt's saves as old. With nothing saved, the
+      # most recently read entry is kept, which is the one the run restored.
+      #
+      # A toolchain change moves the key's environment hash too, so the previous
+      # toolchain's entries fall outside these groups and leave by eviction.
+      - name: Delete this branch's superseded rust-cache entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          head=$(gh api "repos/${GH_REPO}/git/ref/${REF#refs/}" --jq .object.sha)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "${REF} has moved on from ${GITHUB_SHA} to ${head}; nothing pruned"
+            exit 0
+          fi
+          created=$(gh api "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)
+          gh cache list --ref "$REF" --limit 1000 --json id,key,createdAt,lastAccessedAt,sizeInBytes \
+            | jq -r --arg created "$created" '[.[] | select(.key | startswith("v0-rust-"))]
+                | group_by(.key | sub("-[^-]+$"; ""))
+                | .[] | sort_by([.createdAt >= $created, .lastAccessedAt]) | .[:-1][]
+                | "\(.id)\t\(.sizeInBytes)\t\(.key)"' > stale.tsv
+          freed=0
+          while IFS=$'\t' read -r id size key; do
+            gh cache delete "$id"
+            echo "deleted ${key}"
+            freed=$((freed + size))
+          done < stale.tsv
+          echo "Deleted $(wc -l < stale.tsv) superseded caches on ${REF}, $((freed / 1048576)) MB"
