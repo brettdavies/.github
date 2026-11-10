@@ -1,0 +1,71 @@
+# Reusable workflow that dispatches a repository's warm runs on a branch, main
+# by default.
+#
+# A pull request restores caches from its base branch and the default branch,
+# and only a run outside a pull request can save under those branches. A
+# release merge to main starts no CI run, so the release has the account's
+# runners to itself, and main's caches fill here instead, once finalize-release
+# has marked the release latest. Each named workflow needs a workflow_dispatch
+# trigger whose run builds what its checks compile.
+#
+# The job's token can start these runs: GitHub's rule that events made with
+# GITHUB_TOKEN start no workflow run does not cover workflow_dispatch.
+#
+# Caller example (finalize-release.yml):
+#   jobs:
+#     finalize:
+#       uses: brettdavies/.github/.github/workflows/rust-finalize-release.yml@main
+#     warm-main:
+#       needs: finalize
+#       permissions:
+#         actions: write
+#       uses: brettdavies/.github/.github/workflows/warm-dispatch.yml@main
+#       with:
+#         workflows: ci.yml build-examples.yml
+#
+# Required caller permissions: actions: write
+name: Warm dispatch
+
+on:
+  workflow_call:
+    inputs:
+      workflows:
+        description: >-
+          The workflow files to dispatch, separated by spaces. Each needs a
+          workflow_dispatch trigger on the branch dispatched.
+        type: string
+        default: ci.yml
+      ref:
+        description: >-
+          The branch to dispatch them on. A probe passes its own branch, so a
+          change to this workflow is tested without starting main's runs.
+        type: string
+        default: main
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Dispatch warm runs
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch each workflow on the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOWS: ${{ inputs.workflows }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          read -ra files <<<"$WORKFLOWS"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::The workflows input names no workflow to dispatch"
+            exit 1
+          fi
+          for wf in "${files[@]}"; do
+            gh workflow run "$wf" --ref "$REF"
+            echo "Dispatched ${wf} on ${REF}"
+          done
