@@ -67,6 +67,12 @@ else
   echo "pre-push: yq not installed; skipping the search-presence workflow contract, the rust-ci job-id check, the job-name check, and the release tag-source check"
 fi
 
+if command -v yq >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  bash scripts/check-rust-cache-prune.sh
+else
+  echo "pre-push: yq or jq not installed; skipping the rust-cache-prune workflow contract"
+fi
+
 if command -v python3 >/dev/null 2>&1 && command -v yq >/dev/null 2>&1; then
   python3 -B -m unittest discover -s actions/plan-frontmatter -p 'test_*.py'
 else

@@ -86,6 +86,17 @@ jobs:
       - name: Check the search-presence workflow contract
         run: bash scripts/check-search-presence-workflow.sh
 
+  # Holds the cache prune to the entries it may delete. It runs only in a
+  # caller's CI, against that repository's caches, so only this check reports
+  # a change that deletes the entry the next run restores.
+  rust-cache-prune-contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the rust-cache-prune workflow contract
+        run: bash scripts/check-rust-cache-prune.sh
+
   # Holds rust-ci's `jobs` input to its jobs: no caller run fails when a job
   # stops reading the input or the validated id list drifts from the job ids.
   rust-ci-jobs:
