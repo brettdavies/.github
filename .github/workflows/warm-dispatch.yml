@@ -47,10 +47,12 @@ on:
 # only from context is one a caller also produces for its own group; both then
 # land in one group and this workflow's queue cancels the run that called it.
 # The caller and ref parts stay so callers, and refs within a caller, separate.
-# A newer call supersedes an older one: it dispatches every named workflow
-# again, so cancelling one part way leaves nothing undispatched.
+# The ref input's part lets one run dispatch on two branches without either
+# call cancelling the other. A newer call on the same branch supersedes an
+# older one: it dispatches every named workflow again, so cancelling one part
+# way leaves nothing undispatched.
 concurrency:
-  group: warm-dispatch-${{ github.workflow }}-${{ github.ref }}
+  group: warm-dispatch-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}
   cancel-in-progress: true
 
 permissions: {}
