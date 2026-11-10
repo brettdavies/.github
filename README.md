@@ -23,6 +23,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
       pr-cache-cleanup.yml  # reusable delete of a closed pull request's Actions caches
+      warm-dispatch.yml     # reusable dispatch of a repository's warm runs, main's after a release
       search-presence.yml   # reusable post-deploy search regression gate for a site
       lint-basics.yml       # reusable actionlint, markdownlint, shellcheck, and plan frontmatter
       lint.yml              # internal: actionlint on push/PR
@@ -671,6 +672,40 @@ jobs:
     permissions:
       actions: write
     uses: brettdavies/.github/.github/workflows/pr-cache-cleanup.yml@main
+```
+
+### `warm-dispatch.yml`
+
+Dispatches a repository's warm runs on a branch, `main` by default. A pull request restores caches from its base branch
+and the default branch, and only a run outside a pull request can save under those branches. A release merge to `main`
+starts no CI run, so the release has the account's runners to itself, and `finalize-release.yml` calls this once the
+release is marked latest. Each named workflow needs a `workflow_dispatch` trigger whose run builds what its checks
+compile, as `rust-ci.yml` does under `warm_cache: true`.
+
+|                                 |                                                        |
+| ------------------------------- | ------------------------------------------------------ |
+| **Trigger**                     | `workflow_call`                                        |
+| **Inputs**                      | `workflows` (default `ci.yml`), `ref` (default `main`) |
+| **Check name**                  | `<caller job key> / Dispatch warm runs`                |
+| **Required caller permissions** | `actions: write`                                       |
+
+`workflows` names the workflow files to dispatch, separated by spaces, and `ref` the branch to dispatch them on. A probe
+passes its own branch, so a change to this workflow is tested without starting `main`'s runs. The job's token can start
+these runs: GitHub's rule that events made with `GITHUB_TOKEN` start no workflow run does not cover `workflow_dispatch`.
+
+**Caller example** (`finalize-release.yml`):
+
+```yaml
+jobs:
+  finalize:
+    uses: brettdavies/.github/.github/workflows/rust-finalize-release.yml@main
+  warm-main:
+    needs: finalize
+    permissions:
+      actions: write
+    uses: brettdavies/.github/.github/workflows/warm-dispatch.yml@main
+    with:
+      workflows: ci.yml build-examples.yml
 ```
 
 ### `search-presence.yml`
