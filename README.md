@@ -22,6 +22,7 @@ GitHub requires reusable workflows in `.github/workflows/`. Since this repo *is*
       rust-release-matrix-check.yml  # reusable pre-tag build of the release matrix
       rust-lib-release.yml  # reusable release workflow (library crate)
       rust-finalize-release.yml  # reusable finalize workflow
+      pr-cache-cleanup.yml  # reusable delete of a closed pull request's Actions caches
       search-presence.yml   # reusable post-deploy search regression gate for a site
       lint-basics.yml       # reusable actionlint, markdownlint, shellcheck, and plan frontmatter
       lint.yml              # internal: actionlint on push/PR
@@ -637,6 +638,39 @@ permissions:
 jobs:
   guard-release:
     uses: brettdavies/.github/.github/workflows/guard-release-branch.yml@main
+```
+
+### `pr-cache-cleanup.yml`
+
+Deletes a pull request's Actions caches when it closes. A pull request's caches live under `refs/pull/<n>/merge`, which
+only that pull request's runs can read, so once it closes nothing reads them again. They still count against the
+repository's 10 GB limit, and GitHub evicts the least recently used entries first, so they outlast the `dev` and `main`
+entries every new pull request restores from. The job runs `gh cache delete --all --ref refs/pull/<n>/merge` with the
+job's token, so no third-party action is involved. A fork's pull request gets a read-only token, so the job skips it and
+those entries leave by eviction.
+
+|                                 |                                    |
+| ------------------------------- | ---------------------------------- |
+| **Trigger**                     | `workflow_call` (no inputs)        |
+| **Check name**                  | `<caller job key> / Delete caches` |
+| **Required caller permissions** | `actions: write`                   |
+
+The workflow runs from the pull request's merge commit, so a caller that a pull request adds also runs when that pull
+request closes.
+
+**Caller example:**
+
+```yaml
+name: PR cache cleanup
+on:
+  pull_request:
+    types: [closed]
+permissions: {}
+jobs:
+  cleanup:
+    permissions:
+      actions: write
+    uses: brettdavies/.github/.github/workflows/pr-cache-cleanup.yml@main
 ```
 
 ### `search-presence.yml`
