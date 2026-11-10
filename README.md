@@ -681,7 +681,7 @@ the lockfile, and the toolchain files, so each change to one of those leaves the
 generation's caches beside the current ones. They count against the repository's 10 GB limit, and GitHub evicts the
 least recently used entries first, which can take the warm entries pull requests restore from. The job groups the
 branch's `v0-rust-*` entries by key minus the trailing hash and keeps one per group: the entry the run saved, else the
-most recently read. It deletes the rest with the job's token.
+one it restored, else the most recently read. It deletes the rest with the job's token.
 
 - **A re-run after the branch moved on prunes nothing.** A re-run builds its original commit, so its caches are an older
   generation's. The job compares the branch head with the run's commit first and exits 0 when they differ.
@@ -690,6 +690,15 @@ most recently read. It deletes the rest with the job's token.
 - **"Saved by the run" counts every attempt.** It means created after the run's `created_at`, which stays at the first
   attempt's time. `run_started_at` moves to each re-run's start, so re-running a failed job would rank the first
   attempt's saves as old.
+- **A restore outranks a later read too.** A run that restores its exact key saves nothing, and the same stale pull
+  request can read the old generation after that restore. Among the entries read since the run was created, the newest
+  generation is kept. A reverted lockfile change is the one case this gets wrong: the run restores the older generation,
+  a pull request that reads the newer one afterward makes the prune keep the newer one, and the next run on the branch
+  rebuilds and saves its key again.
+- **A delete that races an eviction passes.** When a delete fails, the job lists the branch's caches again: an entry
+  GitHub evicted in the meantime is already gone, and any other failure fails the job.
+- **Some entries stay until eviction.** A retired job's key is alone in its group, and so is the previous toolchain's,
+  because a toolchain change moves the key's environment hash too.
 - **Branch refs only.** On a pull request's or a tag's ref the job skips; pull requests' caches are
   `pr-cache-cleanup.yml`'s.
 
@@ -700,8 +709,11 @@ most recently read. It deletes the rest with the job's token.
 | **Required caller permissions** | `actions: write`, `contents: read`           |
 
 Call it from a job that `needs:` every job that saves a cache, and only after all of them finished: a job that failed or
-was cancelled saved nothing, so its key's newest entry would still be the old generation. Inside a called workflow
-`github.ref`, `github.sha`, and `github.run_id` are the caller's, so the job prunes the branch the caller ran on.
+was cancelled saved nothing, so its key's newest entry would still be the old generation. Runs on one branch must not
+overlap, so the caller's workflow needs a concurrency group per ref, such as `ci-${{ github.ref }}`: an older run still
+going can save its generation after this run was created, and this run would keep that entry over its own. Inside a
+called workflow `github.ref`, `github.sha`, and `github.run_id` are the caller's, so the job prunes the branch the caller
+ran on.
 
 **Caller example:**
 

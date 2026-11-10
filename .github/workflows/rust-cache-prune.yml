@@ -6,12 +6,17 @@
 # previous generation's caches beside the current ones. They still count against
 # the repository's 10 GB limit, and GitHub evicts the least recently used
 # entries first, which can take the warm entries pull requests restore from.
-# This keeps one entry per key, the one the run saved, else the most recently
-# read, and deletes the rest. Pull requests' caches are pr-cache-cleanup.yml's.
+# This keeps one entry per key, the one the run saved, else the one it
+# restored, else the most recently read, and deletes the rest. Pull requests'
+# caches are pr-cache-cleanup.yml's.
 #
 # Call it from a job that needs every job that saves a cache, and only after all
 # of them finished: a job that failed or was cancelled saved nothing, so its
 # key's newest entry would be the old generation.
+#
+# Runs on one branch must not overlap, so the caller's workflow needs a
+# concurrency group per ref: an older run still going can save its generation
+# after this run was created, and this run would keep that entry over its own.
 #
 # Caller example:
 #   jobs:
@@ -57,8 +62,19 @@ jobs:
       # after this run saved the current one. "Saved by this run" means created
       # after the run's created_at, which stays at the first attempt's time,
       # whereas run_started_at moves to each re-run's, so a re-run of failed jobs
-      # would rank the first attempt's saves as old. With nothing saved, the
-      # most recently read entry is kept, which is the one the run restored.
+      # would rank the first attempt's saves as old.
+      #
+      # With nothing saved, the run restored its exact key, and entries read
+      # since the run was created rank next, newest first: a pull request can
+      # read an older generation after that restore, which would make the old
+      # entry the most recently read. With neither, the most recently read
+      # entry is kept. After a reverted lockfile change the run restores the
+      # older generation, so a pull request that reads the newer one afterward
+      # makes the step keep the newer one, and the next run saves its key again.
+      #
+      # A delete that fails is checked against a fresh listing: an entry
+      # GitHub evicted in the meantime is already gone, and any other failure
+      # fails the job.
       #
       # A toolchain change moves the key's environment hash too, so the previous
       # toolchain's entries fall outside these groups and leave by eviction.
@@ -78,12 +94,25 @@ jobs:
           gh cache list --ref "$REF" --limit 1000 --json id,key,createdAt,lastAccessedAt,sizeInBytes \
             | jq -r --arg created "$created" '[.[] | select(.key | startswith("v0-rust-"))]
                 | group_by(.key | sub("-[^-]+$"; ""))
-                | .[] | sort_by([.createdAt >= $created, .lastAccessedAt]) | .[:-1][]
+                | .[] | sort_by([
+                    .createdAt >= $created,
+                    .lastAccessedAt >= $created,
+                    if .lastAccessedAt >= $created then .createdAt else .lastAccessedAt end
+                  ]) | .[:-1][]
                 | "\(.id)\t\(.sizeInBytes)\t\(.key)"' > stale.tsv
+          deleted=0
           freed=0
           while IFS=$'\t' read -r id size key; do
-            gh cache delete "$id"
+            if ! gh cache delete "$id"; then
+              listed=$(gh cache list --ref "$REF" --limit 1000 --json id --jq '.[].id')
+              if grep -qx "$id" <<<"$listed"; then
+                exit 1
+              fi
+              echo "${key} was already gone"
+              continue
+            fi
             echo "deleted ${key}"
+            deleted=$((deleted + 1))
             freed=$((freed + size))
           done < stale.tsv
-          echo "Deleted $(wc -l < stale.tsv) superseded caches on ${REF}, $((freed / 1048576)) MB"
+          echo "Deleted ${deleted} superseded caches on ${REF}, $((freed / 1048576)) MB"
