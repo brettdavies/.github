@@ -19,6 +19,9 @@
 # after this run was created, and this run would keep that entry over its own.
 #
 # Caller example:
+#   concurrency:
+#     group: ci-${{ github.ref }}
+#     cancel-in-progress: true
 #   jobs:
 #     prune-caches:
 #       needs: [warm, windows]

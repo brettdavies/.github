@@ -710,14 +710,17 @@ one it restored, else the most recently read. It deletes the rest with the job's
 
 Call it from a job that `needs:` every job that saves a cache, and only after all of them finished: a job that failed or
 was cancelled saved nothing, so its key's newest entry would still be the old generation. Runs on one branch must not
-overlap, so the caller's workflow needs a concurrency group per ref, such as `ci-${{ github.ref }}`: an older run still
-going can save its generation after this run was created, and this run would keep that entry over its own. Inside a
-called workflow `github.ref`, `github.sha`, and `github.run_id` are the caller's, so the job prunes the branch the caller
-ran on.
+overlap, so the caller's workflow needs a concurrency group per ref, as in the example: an older run still going can
+save its generation after this run was created, and this run would keep that entry over its own. Inside a called
+workflow `github.ref`, `github.sha`, and `github.run_id` are the caller's, so the job prunes the branch the caller ran
+on.
 
 **Caller example:**
 
 ```yaml
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   # ... the jobs that save caches, here warm and windows ...
   prune-caches:
