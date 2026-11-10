@@ -42,6 +42,17 @@ on:
         type: string
         default: main
 
+# A literal token leads the group key. Inside a called workflow
+# `github.workflow` resolves to the *caller's* workflow name, so a key built
+# only from context is one a caller also produces for its own group; both then
+# land in one group and this workflow's queue cancels the run that called it.
+# The caller and ref parts stay so callers, and refs within a caller, separate.
+# A newer call supersedes an older one: it dispatches every named workflow
+# again, so cancelling one part way leaves nothing undispatched.
+concurrency:
+  group: warm-dispatch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:
@@ -60,7 +71,9 @@ jobs:
           REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          read -ra files <<<"$WORKFLOWS"
+          # -d '' reads to the end of the input, so a value written as a YAML
+          # block splits on its newlines too; read returns 1 at the end.
+          read -r -d '' -a files <<<"$WORKFLOWS" || true
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::The workflows input names no workflow to dispatch"
             exit 1
