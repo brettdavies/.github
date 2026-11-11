@@ -28,7 +28,7 @@ on:
 # only from context is one a caller also produces for its own group; both then
 # land in one group and this workflow's queue cancels the run that called it.
 # The caller part stays so callers separate. The last part is the pull
-# request's number, not the ref, so the group is one pull request's whatever
+# request's number, not the ref, so each pull request has one group whatever
 # ref its closed event runs on: two pull requests merged moments apart each run
 # their delete, and one closed, reopened, and closed again runs one.
 concurrency:
