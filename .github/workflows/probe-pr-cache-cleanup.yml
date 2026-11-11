@@ -1,0 +1,28 @@
+# Temporary: a probe pull request's own file, never merged.
+name: Probe PR cache cleanup
+
+on:
+  pull_request:
+    types: [opened, closed]
+
+permissions: {}
+
+jobs:
+  marker:
+    name: Save a cleanup marker
+    if: github.event.action == 'opened' && github.head_ref == 'test/probe-pr-cache-cleanup-group'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "${{ github.run_id }}" > cleanup-marker
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cleanup-marker
+          key: probe-cleanup-marker-${{ github.run_id }}
+
+  cleanup:
+    name: Cleanup
+    if: github.event.action == 'closed'
+    permissions:
+      actions: write
+    uses: ./.github/workflows/pr-cache-cleanup.yml
