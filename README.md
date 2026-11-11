@@ -658,7 +658,8 @@ those entries leave by eviction.
 | **Required caller permissions** | `actions: write`                   |
 
 The workflow runs from the pull request's merge commit, so a caller that a pull request adds also runs when that pull
-request closes.
+request closes. A pull request with a merge conflict starts no `pull_request` run, so one closed while it conflicts keeps
+its entries until they are evicted.
 
 **Caller example:**
 
