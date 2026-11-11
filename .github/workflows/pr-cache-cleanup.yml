@@ -27,11 +27,12 @@ on:
 # `github.workflow` resolves to the *caller's* workflow name, so a key built
 # only from context is one a caller also produces for its own group; both then
 # land in one group and this workflow's queue cancels the run that called it.
-# The caller and ref parts stay so callers, and refs within a caller, separate.
-# The ref is the pull request's merge ref, so a pull request closed, reopened,
-# and closed again runs one delete, not two racing over the same entries.
+# The caller part stays so callers separate. The last part is the pull
+# request's number, not the ref, so each pull request has one group whatever
+# ref its closed event runs on: two pull requests merged moments apart each run
+# their delete, and one closed, reopened, and closed again runs one.
 concurrency:
-  group: pr-cache-cleanup-${{ github.workflow }}-${{ github.ref }}
+  group: pr-cache-cleanup-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}
